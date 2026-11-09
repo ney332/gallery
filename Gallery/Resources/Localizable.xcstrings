@@ -1,0 +1,27 @@
+{
+  "sourceLanguage" : "pt-BR",
+  "strings" : {
+    "gallery.permission.denied" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acesso às fotos não permitido"
+          }
+        }
+      }
+    },
+    "gallery.permission.limited" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acesso limitado às fotos"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}
