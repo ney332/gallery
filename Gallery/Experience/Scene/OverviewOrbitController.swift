@@ -5,6 +5,7 @@ import SwiftUI
 final class OverviewOrbitController {
     private var camera: Entity?
     private let target = GalleryConfig.overviewCameraTarget
+    private let yawCenter = GalleryConfig.overviewCameraYaw
     private var yaw = GalleryConfig.overviewCameraYaw
     private var pitch = GalleryConfig.overviewCameraPitch
     private let radius = GalleryConfig.overviewCameraRadius
@@ -44,20 +45,19 @@ final class OverviewOrbitController {
         let sensitivity = viewportSize.width > 0
             ? 2 * Float.pi / Float(viewportSize.width)
             : 0.01
-//        let verticalSensitivity = sensitivity * 0.5
+
         let yawOffset = Float(translation.width) * sensitivity
-        yaw = yawAtDragStart + yawOffset
+        let maximumYawOffset: Float = .pi / 2
+        yaw = min(
+            max(yawAtDragStart + yawOffset, yawCenter - maximumYawOffset),
+            yawCenter + maximumYawOffset
+        )
 
         // Keep the camera looking down enough that the top edge of the
         // vertical frustum does not point into the ceiling.
         let minPitch = Float(20 * Double.pi / 180)
         let maxPitch = Float(75 * Double.pi / 180)
         pitch = min(max(pitchAtDragStart - Float(translation.height) * sensitivity, minPitch), maxPitch)
-
-//        pitch = min(
-//            max(pitchAtDragStart - Float(translation.height) * verticalSensitivity, minPitch),
-//            maxPitch
-//        )
         updateCamera()
     }
 
