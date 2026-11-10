@@ -2,7 +2,9 @@ import Foundation
 
 enum GalleryConfig {
     static let minimumSupportedOS = "26.0"
-    static let overviewCameraFieldOfView: Float = 58.4
+    // Vertical field of view stays bounded in portrait, preventing the upper
+    // edge of the image from looking through the nearby ceiling geometry.
+    static let overviewCameraFieldOfView: Float = 45.2
     // Blender Z-up camera location converted to RealityKit's Y-up coordinates.
     static let overviewCameraPosition = SIMD3<Float>(-1.9687666, 2.2591279, -1.9687669)
     // Orbit target converted from Blender Z-up coordinates to RealityKit's Y-up coordinates.

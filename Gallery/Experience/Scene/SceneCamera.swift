@@ -6,10 +6,10 @@ enum SceneCamera {
         let camera = Entity()
         camera.name = "GalleryCamera"
         let component = PerspectiveCameraComponent(
-            near: 0.01,
-            far: 100,
+            near: 0.005,
+            far: 20,
             fieldOfViewInDegrees: GalleryConfig.overviewCameraFieldOfView,
-            fieldOfViewOrientation: .horizontal
+            fieldOfViewOrientation: .vertical
         )
         camera.components.set(component)
 

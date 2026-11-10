@@ -8,6 +8,18 @@ final class OverviewOrbitController {
     private var yaw = GalleryConfig.overviewCameraYaw
     private var pitch = GalleryConfig.overviewCameraPitch
     private let radius = GalleryConfig.overviewCameraRadius
+    // Inner faces measured from the closed Paredes shell in BaseCenario.usdz.
+    private let roomLeftWallX: Float = -1.979
+    private let roomRightWallX: Float = 2.013
+    private let roomBackWallZ: Float = 2.024
+    private let roomFrontWallZ: Float = -2.024
+    private let wallClearance: Float = 0.015
+    private let roomFloorY: Float = 0.02
+    private let ceilingFootprintHalfWidth: Float = 2.20
+    private let ceilingFrontEdgeZ: Float = -2.20
+    private let ceilingBackEdgeZ: Float = 2.20
+    // The ceiling mesh starts at Y ~= 2.99 m; retain clearance beneath it.
+    private let roomCeilingY: Float = 2.78
     private var yawAtDragStart: Float = 0
     private var pitchAtDragStart: Float = 0
     private var zoomAtDragStart: Float?
@@ -32,11 +44,14 @@ final class OverviewOrbitController {
         let sensitivity = viewportSize.width > 0
             ? 2 * Float.pi / Float(viewportSize.width)
             : 0.01
-        yaw = yawAtDragStart + Float(translation.width) * sensitivity
+        let yawOffset = Float(translation.width) * sensitivity
+        yaw = yawAtDragStart + yawOffset
 
-        let minPitchOffset = Float(-5 * Double.pi / 180)
-        let maxPitchOffset = Float(55 * Double.pi / 180)
-        pitch = min(max(pitchAtDragStart - Float(translation.height) * sensitivity, minPitchOffset), maxPitchOffset)
+        // Keep the camera looking down enough that the top edge of the
+        // vertical frustum does not point into the ceiling.
+        let minPitch = Float(20 * Double.pi / 180)
+        let maxPitch = Float(75 * Double.pi / 180)
+        pitch = min(max(pitchAtDragStart - Float(translation.height) * sensitivity, minPitch), maxPitch)
         updateCamera()
     }
 
@@ -47,7 +62,10 @@ final class OverviewOrbitController {
         guard var component = camera.components[PerspectiveCameraComponent.self] else { return }
         if zoomAtDragStart == nil { zoomAtDragStart = component.fieldOfViewInDegrees }
         guard let zoomAtDragStart else { return }
-        component.fieldOfViewInDegrees = min(max(zoomAtDragStart / Float(magnification), 25), 85)
+        component.fieldOfViewInDegrees = min(
+            max(zoomAtDragStart / Float(magnification), 20),
+            GalleryConfig.overviewCameraFieldOfView
+        )
         camera.components.set(component)
     }
 
@@ -58,11 +76,26 @@ final class OverviewOrbitController {
     private func updateCamera() {
         guard let camera else { return }
         let horizontalRadius = radius * cos(pitch)
-        let position = target + SIMD3<Float>(
+        let requestedPosition = target + SIMD3<Float>(
             horizontalRadius * sin(yaw),
             radius * sin(pitch),
             horizontalRadius * cos(yaw)
         )
+        let position = keepCameraOutsideWallShell(requestedPosition)
         camera.look(at: target, from: position, upVector: SIMD3<Float>(0, 1, 0), relativeTo: nil)
+    }
+
+    private func keepCameraOutsideWallShell(_ position: SIMD3<Float>) -> SIMD3<Float> {
+        var safe = position
+        safe.x = min(
+            max(safe.x, roomLeftWallX + wallClearance),
+            roomRightWallX - wallClearance
+        )
+        safe.z = min(
+            max(safe.z, roomFrontWallZ + wallClearance),
+            roomBackWallZ - wallClearance
+        )
+        safe.y = min(max(safe.y, roomFloorY), roomCeilingY)
+        return safe
     }
 }
