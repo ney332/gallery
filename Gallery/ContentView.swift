@@ -3,28 +3,27 @@ import SwiftUI
 
 struct ContentView: View {
     let libraryModel: GalleryLibraryModel
-
     @State private var orbitController = OverviewOrbitController()
-    @State private var isDraggingBackground = false
-    @State private var dragDelta: CGSize = .zero
+    @State private var isDragging = false
 
     var body: some View {
         GeometryReader { geometry in
             scene(viewportSize: geometry.size)
         }
-        .ignoresSafeArea()
-        .background(Color(red: 0.12, green: 0.10, blue: 0.09))
+            .ignoresSafeArea()
+            .background(Color(red: 0.12, green: 0.10, blue: 0.09))
     }
 
     private func scene(viewportSize: CGSize) -> some View {
         RealityView { content in
+            content.camera = .virtual
             let loader = BlenderAssetLoader(catalog: .main)
             let roomFallback = loader.fallback(for: .room)
             content.add(roomFallback)
 
-            let camera = SceneCamera.makeOverviewCamera(viewportSize: viewportSize)
-            orbitController.attach(camera: camera, viewportSize: viewportSize)
+            let camera = SceneCamera.makeOverviewCamera()
             content.add(camera)
+            orbitController.attach(camera: camera, viewportSize: viewportSize)
 
             let light = Entity()
             light.components.set(DirectionalLightComponent(intensity: 1800))
@@ -38,23 +37,28 @@ struct ContentView: View {
             orbitController.updateViewport(viewportSize)
         }
         .overlay {
-            CameraGestureSurface(
-                onDragChanged: { translation in
-                    if !isDraggingBackground {
-                        isDraggingBackground = true
-                        dragDelta = .zero
-                        orbitController.beginDrag()
-                    }
-                    dragDelta = translation
-                    orbitController.updateDrag(translation: translation)
-                },
-                onDragEnded: { velocity in
-                    isDraggingBackground = false
-                    orbitController.endDrag(velocity: velocity)
-                },
-                onMagnificationChanged: orbitController.updateZoom(magnification:),
-                onMagnificationEnded: { orbitController.endZoom() }
-            )
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 1, coordinateSpace: .local)
+                        .onChanged { value in
+                            if !isDragging {
+                                isDragging = true
+                                orbitController.beginDrag()
+                            }
+                            orbitController.updateDrag(translation: value.translation)
+                        }
+                        .onEnded { _ in
+                            isDragging = false
+                            orbitController.endDrag()
+                        },
+                    including: .all
+                )
+                .simultaneousGesture(
+                    MagnifyGesture()
+                        .onChanged { orbitController.updateZoom(magnification: $0.magnification) }
+                        .onEnded { _ in orbitController.endZoom() }
+                )
         }
         .overlay(alignment: .bottom) {
             if libraryModel.access == .denied || libraryModel.access == .restricted {
@@ -66,42 +70,7 @@ struct ContentView: View {
                     .padding(.bottom, 24)
             }
         }
-        .overlay(alignment: .topLeading) {
-            if isDraggingBackground {
-                Text("Arraste: \(Int(dragDelta.width)) px")
-                    .font(.caption.monospacedDigit())
-                    .padding(8)
-                    .background(.black.opacity(0.65), in: Capsule())
-                    .foregroundStyle(.white)
-                    .padding(.top, 12)
-                    .padding(.leading, 12)
-                    .allowsHitTesting(false)
-            }
-        }
         .task { await libraryModel.load() }
-    }
-}
-
-private struct CameraGestureSurface: View {
-    let onDragChanged: (CGSize) -> Void
-    let onDragEnded: (CGSize) -> Void
-    let onMagnificationChanged: (CGFloat) -> Void
-    let onMagnificationEnded: () -> Void
-
-    var body: some View {
-        Color.clear
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .local)
-                    .onChanged { onDragChanged($0.translation) }
-                    .onEnded { onDragEnded($0.velocity) },
-                including: .all
-            )
-            .simultaneousGesture(
-                MagnifyGesture()
-                    .onChanged { onMagnificationChanged($0.magnification) }
-                    .onEnded { _ in onMagnificationEnded() }
-            )
     }
 }
 

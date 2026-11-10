@@ -15,6 +15,8 @@ struct BlenderAssetLoader {
             let entity = try await Entity(contentsOf: url)
             entity.name = catalog.definition(for: asset)?.logicalEntityName ?? asset.rawValue
             if case .room = asset {
+                let embeddedCameraCount = removeEmbeddedCameras(from: entity)
+                print("Removed \(embeddedCameraCount) embedded USDZ cameras from room asset")
                 applyScenarioMaterials(
                     to: entity,
                     inheritedColor: UIColor(red: 0.72, green: 0.68, blue: 0.61, alpha: 1)
@@ -76,6 +78,27 @@ struct BlenderAssetLoader {
         for child in entity.children {
             applyScenarioMaterials(to: child, inheritedColor: color)
         }
+    }
+
+    private func removeEmbeddedCameras(from entity: Entity) -> Int {
+        var removedCount = 0
+        if entity.components.has(PerspectiveCameraComponent.self) {
+            entity.components.remove(PerspectiveCameraComponent.self)
+            removedCount += 1
+        }
+        if entity.components.has(OrthographicCameraComponent.self) {
+            entity.components.remove(OrthographicCameraComponent.self)
+            removedCount += 1
+        }
+        if entity.components.has(ProjectiveTransformCameraComponent.self) {
+            entity.components.remove(ProjectiveTransformCameraComponent.self)
+            removedCount += 1
+        }
+
+        for child in entity.children {
+            removedCount += removeEmbeddedCameras(from: child)
+        }
+        return removedCount
     }
 
     private func scenarioColor(for name: String) -> UIColor? {

@@ -1,17 +1,24 @@
 import RealityKit
-import SwiftUI
 
 @MainActor
 enum SceneCamera {
-    static func makeOverviewCamera(viewportSize: CGSize) -> Entity {
+    static func makeOverviewCamera() -> Entity {
         let camera = Entity()
         camera.name = "GalleryCamera"
-        var component = OrthographicCameraComponent()
-        component.scale = GalleryConfig.overviewCameraScale(for: viewportSize)
-        component.near = 0.01
-        component.far = 100
-        component.scaleDirection = .vertical
+        let component = PerspectiveCameraComponent(
+            near: 0.01,
+            far: 100,
+            fieldOfViewInDegrees: GalleryConfig.overviewCameraFieldOfView,
+            fieldOfViewOrientation: .horizontal
+        )
         camera.components.set(component)
+
+        camera.look(
+            at: GalleryConfig.overviewCameraTarget,
+            from: GalleryConfig.overviewCameraPosition,
+            upVector: SIMD3<Float>(0, 1, 0),
+            relativeTo: nil
+        )
         return camera
     }
 }
