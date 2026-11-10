@@ -44,6 +44,7 @@ final class OverviewOrbitController {
         let sensitivity = viewportSize.width > 0
             ? 2 * Float.pi / Float(viewportSize.width)
             : 0.01
+//        let verticalSensitivity = sensitivity * 0.5
         let yawOffset = Float(translation.width) * sensitivity
         yaw = yawAtDragStart + yawOffset
 
@@ -52,6 +53,11 @@ final class OverviewOrbitController {
         let minPitch = Float(20 * Double.pi / 180)
         let maxPitch = Float(75 * Double.pi / 180)
         pitch = min(max(pitchAtDragStart - Float(translation.height) * sensitivity, minPitch), maxPitch)
+
+//        pitch = min(
+//            max(pitchAtDragStart - Float(translation.height) * verticalSensitivity, minPitch),
+//            maxPitch
+//        )
         updateCamera()
     }
 
@@ -82,7 +88,17 @@ final class OverviewOrbitController {
             horizontalRadius * cos(yaw)
         )
         let position = keepCameraOutsideWallShell(requestedPosition)
-        camera.look(at: target, from: position, upVector: SIMD3<Float>(0, 1, 0), relativeTo: nil)
+        let forward = SIMD3<Float>(
+            -cos(pitch) * sin(yaw),
+            -sin(pitch),
+            -cos(pitch) * cos(yaw)
+        )
+        camera.look(
+            at: position + forward,
+            from: position,
+            upVector: SIMD3<Float>(0, 1, 0),
+            relativeTo: nil
+        )
     }
 
     private func keepCameraOutsideWallShell(_ position: SIMD3<Float>) -> SIMD3<Float> {
