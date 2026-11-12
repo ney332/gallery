@@ -16,6 +16,7 @@ struct ContentView: View {
 
     private func scene(viewportSize: CGSize) -> some View {
         RealityView { content in
+            let sceneSetupStart = ContinuousClock.now
             content.camera = .virtual
             let loader = BlenderAssetLoader(catalog: .main)
             let roomFallback = loader.fallback(for: .room)
@@ -25,41 +26,40 @@ struct ContentView: View {
             content.add(camera)
             orbitController.attach(camera: camera, viewportSize: viewportSize)
 
-            let light = Entity()
-            light.components.set(DirectionalLightComponent(intensity: 1800))
-            light.orientation = simd_quatf(angle: -.pi / 4, axis: [1, 0, 0])
-            content.add(light)
-
             let room = await loader.load(.room)
             roomFallback.removeFromParent()
             content.add(room)
+            print("RealityView scene setup: \(sceneSetupStart.duration(to: .now))")
         } update: { _ in
             orbitController.updateViewport(viewportSize)
         }
-        .overlay {
-            Color.clear
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 1, coordinateSpace: .local)
-                        .onChanged { value in
-                            if !isDragging {
-                                isDragging = true
-                                orbitController.beginDrag()
-                            }
-                            orbitController.updateDrag(translation: value.translation)
-                        }
-                        .onEnded { _ in
-                            isDragging = false
-                            orbitController.endDrag()
-                        },
-                    including: .all
-                )
-                .simultaneousGesture(
-                    MagnifyGesture()
-                        .onChanged { orbitController.updateZoom(magnification: $0.magnification) }
-                        .onEnded { _ in orbitController.endZoom() }
-                )
-        }
+        .simultaneousGesture(
+            TapGesture()
+                .targetedToAnyEntity()
+                .onEnded { value in
+                    guard let shelf = shelfAncestor(from: value.entity) else { return }
+                    orbitController.toggleFocus(on: shelf)
+                }
+        )
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .local)
+                .onChanged { value in
+                    if !isDragging {
+                        isDragging = true
+                        orbitController.beginDrag()
+                    }
+                    orbitController.updateDrag(translation: value.translation)
+                }
+                .onEnded { _ in
+                    isDragging = false
+                    orbitController.endDrag()
+                }
+        )
+        .simultaneousGesture(
+            MagnifyGesture()
+                .onChanged { orbitController.updateZoom(magnification: $0.magnification) }
+                .onEnded { _ in orbitController.endZoom() }
+        )
         .overlay(alignment: .bottom) {
             if libraryModel.access == .denied || libraryModel.access == .restricted {
                 Text("gallery.permission.denied")
@@ -71,6 +71,17 @@ struct ContentView: View {
             }
         }
         .task { await libraryModel.load() }
+    }
+
+    private func shelfAncestor(from entity: Entity) -> Entity? {
+        var current: Entity? = entity
+        while let candidate = current {
+            if candidate.name.compare("Estante", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+                return candidate
+            }
+            current = candidate.parent
+        }
+        return nil
     }
 }
 

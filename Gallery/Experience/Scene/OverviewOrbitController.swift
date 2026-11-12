@@ -4,11 +4,12 @@ import SwiftUI
 @MainActor
 final class OverviewOrbitController {
     private var camera: Entity?
-    private let target = GalleryConfig.overviewCameraTarget
-    private let yawCenter = GalleryConfig.overviewCameraYaw
+    private let moveCamera = MoveCamera()
+    private var target = GalleryConfig.overviewCameraTarget
+    private var yawCenter = GalleryConfig.overviewCameraYaw
     private var yaw = GalleryConfig.overviewCameraYaw
     private var pitch = GalleryConfig.overviewCameraPitch
-    private let radius = GalleryConfig.overviewCameraRadius
+    private var radius = GalleryConfig.overviewCameraRadius
     // Inner faces measured from the closed Paredes shell in BaseCenario.usdz.
     private let roomLeftWallX: Float = -1.979
     private let roomRightWallX: Float = 2.013
@@ -25,11 +26,80 @@ final class OverviewOrbitController {
     private var pitchAtDragStart: Float = 0
     private var zoomAtDragStart: Float?
     private var viewportSize: CGSize = .zero
+    private var savedOrbitState: OrbitState?
+
+    private struct OrbitState {
+        let target: SIMD3<Float>
+        let yawCenter: Float
+        let yaw: Float
+        let pitch: Float
+        let radius: Float
+    }
 
     func attach(camera: Entity, viewportSize: CGSize) {
         self.camera = camera
         self.viewportSize = viewportSize
+        moveCamera.attach(camera: camera)
         updateCamera()
+    }
+
+    func toggleFocus(on shelf: Entity) {
+        if savedOrbitState != nil {
+            restorePreviousView()
+            return
+        }
+        guard let camera else { return }
+
+        savedOrbitState = OrbitState(
+            target: target,
+            yawCenter: yawCenter,
+            yaw: yaw,
+            pitch: pitch,
+            radius: radius
+        )
+
+        let bounds = shelf.visualBounds(relativeTo: nil)
+        let shelfCenter = bounds.center
+        let shelfHeight = max(bounds.extents.y, 0.5)
+        let fieldOfView = camera.components[PerspectiveCameraComponent.self]?.fieldOfViewInDegrees
+            ?? GalleryConfig.overviewCameraFieldOfView
+        let fieldOfViewRadians = fieldOfView * .pi / 180
+        let framingDistance = shelfHeight / (2 * tan(fieldOfViewRadians / 2)) * 1.08
+        let focusPitch = Float(20 * Double.pi / 180)
+        let focusRadius = max(framingDistance, 1.6)
+        let horizontalRadius = focusRadius * cos(focusPitch)
+
+        // The shelf is against the room's right wall; its front faces the room (-X).
+        let requestedPosition = shelfCenter + SIMD3<Float>(
+            -horizontalRadius,
+            focusRadius * sin(focusPitch),
+            0
+        )
+        let position = keepCameraOutsideWallShell(requestedPosition)
+
+        target = shelfCenter
+        radius = simd_distance(position, target)
+        yaw = atan2(position.x - target.x, position.z - target.z)
+        yawCenter = yaw
+        pitch = atan2(
+            position.y - target.y,
+            simd_length(SIMD2(position.x - target.x, position.z - target.z))
+        )
+
+        moveCamera.move(to: position, lookingAt: shelfCenter)
+    }
+
+    private func restorePreviousView() {
+        guard camera != nil, let savedOrbitState else { return }
+        target = savedOrbitState.target
+        yawCenter = savedOrbitState.yawCenter
+        yaw = savedOrbitState.yaw
+        pitch = savedOrbitState.pitch
+        radius = savedOrbitState.radius
+        self.savedOrbitState = nil
+
+        let position = keepCameraOutsideWallShell(requestedCameraPosition())
+        moveCamera.move(to: position, lookingAt: position + cameraForward())
     }
 
     func updateViewport(_ size: CGSize) {
@@ -81,23 +151,29 @@ final class OverviewOrbitController {
 
     private func updateCamera() {
         guard let camera else { return }
+        let position = keepCameraOutsideWallShell(requestedCameraPosition())
+        camera.look(
+            at: position + cameraForward(),
+            from: position,
+            upVector: SIMD3<Float>(0, 1, 0),
+            relativeTo: nil
+        )
+    }
+
+    private func requestedCameraPosition() -> SIMD3<Float> {
         let horizontalRadius = radius * cos(pitch)
-        let requestedPosition = target + SIMD3<Float>(
+        return target + SIMD3<Float>(
             horizontalRadius * sin(yaw),
             radius * sin(pitch),
             horizontalRadius * cos(yaw)
         )
-        let position = keepCameraOutsideWallShell(requestedPosition)
-        let forward = SIMD3<Float>(
+    }
+
+    private func cameraForward() -> SIMD3<Float> {
+        SIMD3<Float>(
             -cos(pitch) * sin(yaw),
             -sin(pitch),
             -cos(pitch) * cos(yaw)
-        )
-        camera.look(
-            at: position + forward,
-            from: position,
-            upVector: SIMD3<Float>(0, 1, 0),
-            relativeTo: nil
         )
     }
 

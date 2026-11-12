@@ -12,16 +12,22 @@ struct BlenderAssetLoader {
         }
 
         do {
+            let loadStart = ContinuousClock.now
             let entity = try await Entity(contentsOf: url)
+            let importDuration = loadStart.duration(to: .now)
             entity.name = catalog.definition(for: asset)?.logicalEntityName ?? asset.rawValue
             if case .room = asset {
-                let embeddedCameraCount = removeEmbeddedCameras(from: entity)
-                print("Removed \(embeddedCameraCount) embedded USDZ cameras from room asset")
-                applyScenarioMaterials(
-                    to: entity,
-                    inheritedColor: UIColor(red: 0.72, green: 0.68, blue: 0.61, alpha: 1)
-                )
+                removeBlenderCamera(from: entity)
+                configureShelfInteraction(in: entity)
             }
+            let complexity = sceneComplexity(of: entity)
+            print(
+                "USDZ load [\(asset.rawValue)]: import=\(importDuration), " +
+                "entities=\(complexity.entities), meshes=\(complexity.meshes), " +
+                "materials=\(complexity.materials), " +
+                "lights(directional/point/spot)=\(complexity.directionalLights)/" +
+                "\(complexity.pointLights)/\(complexity.spotLights)"
+            )
             logAnimationInventory(of: entity, asset: asset)
             return entity
         } catch {
@@ -68,49 +74,78 @@ struct BlenderAssetLoader {
         return root
     }
 
-    private func applyScenarioMaterials(to entity: Entity, inheritedColor: UIColor) {
-        let color = scenarioColor(for: entity.name) ?? inheritedColor
-        if var model = entity.components[ModelComponent.self] {
-            model.materials = [SimpleMaterial(color: color, roughness: 0.92, isMetallic: false)]
-            entity.components.set(model)
+    private func configureShelfInteraction(in root: Entity) {
+        guard let shelf = findEntity(named: "Estante", in: root) else {
+            print("Shelf interaction target 'Estante' was not found in the room USDZ")
+            return
         }
 
-        for child in entity.children {
-            applyScenarioMaterials(to: child, inheritedColor: color)
-        }
+        shelf.generateCollisionShapes(recursive: true)
+        shelf.components.set(InputTargetComponent())
+        print("Configured shelf tap target: \(shelf.name)")
     }
 
-    private func removeEmbeddedCameras(from entity: Entity) -> Int {
-        var removedCount = 0
-        if entity.components.has(PerspectiveCameraComponent.self) {
-            entity.components.remove(PerspectiveCameraComponent.self)
-            removedCount += 1
-        }
-        if entity.components.has(OrthographicCameraComponent.self) {
-            entity.components.remove(OrthographicCameraComponent.self)
-            removedCount += 1
-        }
-        if entity.components.has(ProjectiveTransformCameraComponent.self) {
-            entity.components.remove(ProjectiveTransformCameraComponent.self)
-            removedCount += 1
+    private func removeBlenderCamera(from root: Entity) {
+        var removed = 0
+
+        func removeCameraEntities(from parent: Entity) {
+            for child in parent.children {
+                if child.name.compare("Camera", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+                    child.removeFromParent()
+                    removed += 1
+                } else {
+                    removeCameraEntities(from: child)
+                }
+            }
         }
 
-        for child in entity.children {
-            removedCount += removeEmbeddedCameras(from: child)
-        }
-        return removedCount
+        removeCameraEntities(from: root)
+        print("Removed imported Blender cameras: \(removed)")
     }
 
-    private func scenarioColor(for name: String) -> UIColor? {
-        return switch name.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current) {
-        case "paredes": UIColor(red: 0.77, green: 0.72, blue: 0.65, alpha: 1)
-        case "piso", "teto": UIColor(red: 0.62, green: 0.55, blue: 0.45, alpha: 1)
-        case "cama", "cabiceira": UIColor(red: 0.44, green: 0.53, blue: 0.63, alpha: 1)
-        case "armario", "mesa": UIColor(red: 0.48, green: 0.31, blue: 0.20, alpha: 1)
-        case "tapete": UIColor(red: 0.67, green: 0.61, blue: 0.50, alpha: 1)
-        case "vaso": UIColor(red: 0.39, green: 0.57, blue: 0.53, alpha: 1)
-        default: nil
+    private func findEntity(named name: String, in root: Entity) -> Entity? {
+        if root.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+            return root
         }
+        for child in root.children {
+            if let match = findEntity(named: name, in: child) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    private func sceneComplexity(of root: Entity) -> (
+        entities: Int,
+        meshes: Int,
+        materials: Int,
+        directionalLights: Int,
+        pointLights: Int,
+        spotLights: Int
+    ) {
+        var entities = 0
+        var meshes = 0
+        var materials = 0
+        var directionalLights = 0
+        var pointLights = 0
+        var spotLights = 0
+
+        func visit(_ entity: Entity) {
+            entities += 1
+            directionalLights += entity.components.has(DirectionalLightComponent.self) ? 1 : 0
+            pointLights += entity.components.has(PointLightComponent.self) ? 1 : 0
+            spotLights += entity.components.has(SpotLightComponent.self) ? 1 : 0
+            if let model = entity.components[ModelComponent.self] {
+                meshes += 1
+                materials += model.materials.count
+            }
+            for child in entity.children {
+                visit(child)
+            }
+        }
+
+        visit(root)
+        return (entities, meshes, materials, directionalLights, pointLights, spotLights)
     }
 
     private func logAnimationInventory(of root: Entity, asset: GalleryAssetID) {

@@ -20,7 +20,7 @@ enum AssetManifest {
     static let definitions: [GalleryAssetID: AssetDefinition] = [
         .room: AssetDefinition(
             fileName: "BaseCenario",
-            version: 2,
+            version: 4,
             logicalEntityName: "BaseScenario",
             animationNames: [:]
         ),
