@@ -4,11 +4,12 @@ import SwiftUI
 @MainActor
 final class OverviewOrbitController {
     private var camera: Entity?
-    private let target = GalleryConfig.overviewCameraTarget
-    private let yawCenter = GalleryConfig.overviewCameraYaw
+    private let moveCamera = MoveCamera()
+    private var target = GalleryConfig.overviewCameraTarget
+    private var yawCenter = GalleryConfig.overviewCameraYaw
     private var yaw = GalleryConfig.overviewCameraYaw
     private var pitch = GalleryConfig.overviewCameraPitch
-    private let radius = GalleryConfig.overviewCameraRadius
+    private var radius = GalleryConfig.overviewCameraRadius
     // Inner faces measured from the closed Paredes shell in BaseCenario.usdz.
     private let roomLeftWallX: Float = -1.979
     private let roomRightWallX: Float = 2.013
@@ -25,11 +26,91 @@ final class OverviewOrbitController {
     private var pitchAtDragStart: Float = 0
     private var zoomAtDragStart: Float?
     private var viewportSize: CGSize = .zero
+    private var savedOrbitState: OrbitState?
+    private weak var focusedEntity: Entity?
+
+    private struct OrbitState {
+        let target: SIMD3<Float>
+        let yawCenter: Float
+        let yaw: Float
+        let pitch: Float
+        let radius: Float
+    }
 
     func attach(camera: Entity, viewportSize: CGSize) {
         self.camera = camera
         self.viewportSize = viewportSize
+        moveCamera.attach(camera: camera)
         updateCamera()
+    }
+
+    func toggleFocus(
+        on entity: Entity,
+        lookingFromFront: Bool = false,
+        pitchDegrees: Float = 20,
+        minimumRadius: Float = 1.6
+    ) {
+        if savedOrbitState != nil, focusedEntity === entity {
+            restorePreviousView()
+            return
+        }
+        guard let camera else { return }
+
+        if savedOrbitState == nil {
+            savedOrbitState = OrbitState(target: target, yawCenter: yawCenter, yaw: yaw, pitch: pitch, radius: radius)
+        }
+        focusedEntity = entity
+
+        let bounds = entity.visualBounds(relativeTo: nil)
+        let focusCenter = bounds.center
+        let focusHeight = max(bounds.extents.y, 0.5)
+        let fieldOfView = camera.components[PerspectiveCameraComponent.self]?.fieldOfViewInDegrees
+            ?? GalleryConfig.overviewCameraFieldOfView
+        let framingDistance = focusHeight / (2 * tan(fieldOfView * .pi / 360)) * 1.08
+        let focusPitch = pitchDegrees * .pi / 180
+        let focusRadius = max(framingDistance, minimumRadius)
+        let horizontalRadius = focusRadius * cos(focusPitch)
+        let horizontalDirection = lookingFromFront
+            ? frontDirection(of: entity)
+            : SIMD3<Float>(-1, 0, 0)
+        let requestedPosition = focusCenter
+            + horizontalDirection * horizontalRadius
+            + SIMD3<Float>(0, focusRadius * sin(focusPitch), 0)
+        let position = keepCameraOutsideWallShell(requestedPosition)
+
+        target = focusCenter
+        radius = simd_distance(position, target)
+        yaw = atan2(position.x - target.x, position.z - target.z)
+        yawCenter = yaw
+        pitch = atan2(
+            position.y - target.y,
+            simd_length(SIMD2(position.x - target.x, position.z - target.z))
+        )
+        moveCamera.move(to: position, lookingAt: focusCenter)
+    }
+
+    private func frontDirection(of entity: Entity) -> SIMD3<Float> {
+        let transform = entity.transformMatrix(relativeTo: nil)
+        let axis = transform.columns.1
+        var direction = SIMD3<Float>(axis.x, axis.y, axis.z)
+        direction.y = 0
+        let length = simd_length(direction)
+        guard length > 0.001 else { return SIMD3<Float>(0, 0, -1) }
+        return direction / length
+    }
+
+    private func restorePreviousView() {
+        guard let savedOrbitState else { return }
+        target = savedOrbitState.target
+        yawCenter = savedOrbitState.yawCenter
+        yaw = savedOrbitState.yaw
+        pitch = savedOrbitState.pitch
+        radius = savedOrbitState.radius
+        self.savedOrbitState = nil
+        focusedEntity = nil
+
+        let position = keepCameraOutsideWallShell(requestedCameraPosition())
+        moveCamera.move(to: position, lookingAt: position + cameraForward())
     }
 
     func updateViewport(_ size: CGSize) {
@@ -81,23 +162,30 @@ final class OverviewOrbitController {
 
     private func updateCamera() {
         guard let camera else { return }
+        let position = requestedCameraPosition()
+        camera.look(
+            at: position + cameraForward(),
+            from: position,
+            upVector: SIMD3<Float>(0, 1, 0),
+            relativeTo: nil
+        )
+    }
+
+    private func requestedCameraPosition() -> SIMD3<Float> {
         let horizontalRadius = radius * cos(pitch)
-        let requestedPosition = target + SIMD3<Float>(
+        let requested = target + SIMD3<Float>(
             horizontalRadius * sin(yaw),
             radius * sin(pitch),
             horizontalRadius * cos(yaw)
         )
-        let position = keepCameraOutsideWallShell(requestedPosition)
-        let forward = SIMD3<Float>(
+        return keepCameraOutsideWallShell(requested)
+    }
+
+    private func cameraForward() -> SIMD3<Float> {
+        SIMD3<Float>(
             -cos(pitch) * sin(yaw),
             -sin(pitch),
             -cos(pitch) * cos(yaw)
-        )
-        camera.look(
-            at: position + forward,
-            from: position,
-            upVector: SIMD3<Float>(0, 1, 0),
-            relativeTo: nil
         )
     }
 

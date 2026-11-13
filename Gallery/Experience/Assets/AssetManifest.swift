@@ -7,6 +7,7 @@ enum GalleryAssetID: String, CaseIterable, Sendable {
 
 struct AssetDefinition: Sendable {
     let fileName: String
+    let fileExtension: String
     let version: Int
     let logicalEntityName: String
     let animationNames: [String: String]
@@ -19,13 +20,15 @@ struct AssetDefinition: Sendable {
 enum AssetManifest {
     static let definitions: [GalleryAssetID: AssetDefinition] = [
         .room: AssetDefinition(
-            fileName: "BaseCenario",
-            version: 2,
+            fileName: "world",
+            fileExtension: "reality",
+            version: 1,
             logicalEntityName: "BaseScenario",
             animationNames: [:]
         ),
         .cardboardBox: AssetDefinition(
             fileName: "Cardboard_box-placeholder",
+            fileExtension: "usdz",
             version: 1,
             logicalEntityName: "ArchiveBox",
             animationNames: [:]

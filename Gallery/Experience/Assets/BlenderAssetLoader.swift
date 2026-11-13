@@ -16,16 +16,15 @@ struct BlenderAssetLoader {
             entity.name = catalog.definition(for: asset)?.logicalEntityName ?? asset.rawValue
             if case .room = asset {
                 let embeddedCameraCount = removeEmbeddedCameras(from: entity)
-                print("Removed \(embeddedCameraCount) embedded USDZ cameras from room asset")
-                applyScenarioMaterials(
-                    to: entity,
-                    inheritedColor: UIColor(red: 0.72, green: 0.68, blue: 0.61, alpha: 1)
-                )
+                print("Removed \(embeddedCameraCount) embedded cameras from room asset")
+                configureShelfInteraction(in: entity)
+                configureDrawerInteraction(in: entity)
+                configureDeskInteraction(in: entity)
             }
             logAnimationInventory(of: entity, asset: asset)
             return entity
         } catch {
-            print("Could not load USDZ asset \(asset.rawValue): \(error); using procedural fallback")
+            print("Could not load scene asset \(asset.rawValue): \(error); using procedural fallback")
             return fallback(for: asset)
         }
     }
@@ -68,18 +67,6 @@ struct BlenderAssetLoader {
         return root
     }
 
-    private func applyScenarioMaterials(to entity: Entity, inheritedColor: UIColor) {
-        let color = scenarioColor(for: entity.name) ?? inheritedColor
-        if var model = entity.components[ModelComponent.self] {
-            model.materials = [SimpleMaterial(color: color, roughness: 0.92, isMetallic: false)]
-            entity.components.set(model)
-        }
-
-        for child in entity.children {
-            applyScenarioMaterials(to: child, inheritedColor: color)
-        }
-    }
-
     private func removeEmbeddedCameras(from entity: Entity) -> Int {
         var removedCount = 0
         if entity.components.has(PerspectiveCameraComponent.self) {
@@ -101,22 +88,55 @@ struct BlenderAssetLoader {
         return removedCount
     }
 
-    private func scenarioColor(for name: String) -> UIColor? {
-        return switch name.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current) {
-        case "paredes": UIColor(red: 0.77, green: 0.72, blue: 0.65, alpha: 1)
-        case "piso", "teto": UIColor(red: 0.62, green: 0.55, blue: 0.45, alpha: 1)
-        case "cama", "cabiceira": UIColor(red: 0.44, green: 0.53, blue: 0.63, alpha: 1)
-        case "armario", "mesa": UIColor(red: 0.48, green: 0.31, blue: 0.20, alpha: 1)
-        case "tapete": UIColor(red: 0.67, green: 0.61, blue: 0.50, alpha: 1)
-        case "vaso": UIColor(red: 0.39, green: 0.57, blue: 0.53, alpha: 1)
-        default: nil
+    private func configureShelfInteraction(in root: Entity) {
+        guard let shelf = findEntity(named: "Estante", in: root) else {
+            print("Shelf interaction target 'Estante' was not found in the Reality scene")
+            return
         }
+
+        shelf.generateCollisionShapes(recursive: true)
+        shelf.components.set(InputTargetComponent())
+        print("Configured shelf tap target: \(shelf.name)")
+    }
+
+    private func configureDrawerInteraction(in root: Entity) {
+        guard let drawer = findEntity(named: "Gaveta_Cima", in: root) else {
+            print("Drawer interaction target 'Gaveta_Cima' was not found in the Reality scene")
+            return
+        }
+
+        drawer.generateCollisionShapes(recursive: true)
+        drawer.components.set(InputTargetComponent())
+        print("Configured drawer tap target: \(drawer.name)")
+    }
+
+    private func configureDeskInteraction(in root: Entity) {
+        guard let desk = findEntity(named: "Mesa", in: root) else {
+            print("Desk interaction target 'Mesa' was not found in the Reality scene")
+            return
+        }
+
+        desk.generateCollisionShapes(recursive: true)
+        desk.components.set(InputTargetComponent())
+        print("Configured desk tap target: \(desk.name)")
+    }
+
+    private func findEntity(named name: String, in root: Entity) -> Entity? {
+        if root.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+            return root
+        }
+        for child in root.children {
+            if let match = findEntity(named: name, in: child) {
+                return match
+            }
+        }
+        return nil
     }
 
     private func logAnimationInventory(of root: Entity, asset: GalleryAssetID) {
         var inventory: [String] = []
         collectAnimationInventory(from: root, into: &inventory)
-        print("USDZ animation inventory [\(asset.rawValue)]: \(inventory.isEmpty ? "none" : inventory.joined(separator: ", "))")
+        print("Scene animation inventory [\(asset.rawValue)]: \(inventory.isEmpty ? "none" : inventory.joined(separator: ", "))")
     }
 
     private func collectAnimationInventory(from entity: Entity, into inventory: inout [String]) {

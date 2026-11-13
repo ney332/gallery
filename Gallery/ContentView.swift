@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     let libraryModel: GalleryLibraryModel
     @State private var orbitController = OverviewOrbitController()
+    @State private var scenarioAnimationController = ScenarioAnimationController()
     @State private var isDragging = false
 
     var body: some View {
@@ -31,35 +32,58 @@ struct ContentView: View {
             content.add(light)
 
             let room = await loader.load(.room)
+            scenarioAnimationController.attach(to: room)
             roomFallback.removeFromParent()
             content.add(room)
         } update: { _ in
             orbitController.updateViewport(viewportSize)
         }
-        .overlay {
-            Color.clear
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 1, coordinateSpace: .local)
-                        .onChanged { value in
-                            if !isDragging {
-                                isDragging = true
-                                orbitController.beginDrag()
-                            }
-                            orbitController.updateDrag(translation: value.translation)
-                        }
-                        .onEnded { _ in
-                            isDragging = false
-                            orbitController.endDrag()
-                        },
-                    including: .all
-                )
-                .simultaneousGesture(
-                    MagnifyGesture()
-                        .onChanged { orbitController.updateZoom(magnification: $0.magnification) }
-                        .onEnded { _ in orbitController.endZoom() }
-                )
-        }
+        .simultaneousGesture(
+            TapGesture()
+                .targetedToAnyEntity()
+                .onEnded { value in
+                    if let drawer = drawerAncestor(from: value.entity) {
+                        guard scenarioAnimationController.toggleTopDrawer() else { return }
+                        orbitController.toggleFocus(
+                            on: drawer,
+                            lookingFromFront: true,
+                            pitchDegrees: 32,
+                            minimumRadius: 0.75
+                        )
+                        return
+                    }
+                    if let desk = deskAncestor(from: value.entity) {
+                        orbitController.toggleFocus(
+                            on: desk,
+                            lookingFromFront: true,
+                            pitchDegrees: 55,
+                            minimumRadius: 1.15
+                        )
+                        return
+                    }
+                    guard let shelf = shelfAncestor(from: value.entity) else { return }
+                    orbitController.toggleFocus(on: shelf)
+                }
+        )
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .local)
+                .onChanged { value in
+                    if !isDragging {
+                        isDragging = true
+                        orbitController.beginDrag()
+                    }
+                    orbitController.updateDrag(translation: value.translation)
+                }
+                .onEnded { _ in
+                    isDragging = false
+                    orbitController.endDrag()
+                }
+        )
+        .simultaneousGesture(
+            MagnifyGesture()
+                .onChanged { orbitController.updateZoom(magnification: $0.magnification) }
+                .onEnded { _ in orbitController.endZoom() }
+        )
         .overlay(alignment: .bottom) {
             if libraryModel.access == .denied || libraryModel.access == .restricted {
                 Text("gallery.permission.denied")
@@ -71,6 +95,39 @@ struct ContentView: View {
             }
         }
         .task { await libraryModel.load() }
+    }
+
+    private func shelfAncestor(from entity: Entity) -> Entity? {
+        var current: Entity? = entity
+        while let candidate = current {
+            if candidate.name.compare("Estante", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+                return candidate
+            }
+            current = candidate.parent
+        }
+        return nil
+    }
+
+    private func drawerAncestor(from entity: Entity) -> Entity? {
+        var current: Entity? = entity
+        while let candidate = current {
+            if candidate.name.compare("Gaveta_Cima", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+                return candidate
+            }
+            current = candidate.parent
+        }
+        return nil
+    }
+
+    private func deskAncestor(from entity: Entity) -> Entity? {
+        var current: Entity? = entity
+        while let candidate = current {
+            if candidate.name.compare("Mesa", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+                return candidate
+            }
+            current = candidate.parent
+        }
+        return nil
     }
 }
 

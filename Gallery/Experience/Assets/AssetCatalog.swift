@@ -12,6 +12,6 @@ struct AssetCatalog {
 
     func url(for asset: GalleryAssetID) -> URL? {
         guard let definition = definition(for: asset) else { return nil }
-        return bundle.url(forResource: definition.fileName, withExtension: "usdz")
+        return bundle.url(forResource: definition.fileName, withExtension: definition.fileExtension)
     }
 }
