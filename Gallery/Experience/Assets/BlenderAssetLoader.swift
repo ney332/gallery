@@ -20,6 +20,7 @@ struct BlenderAssetLoader {
                 configureShelfInteraction(in: entity)
                 configureDrawerInteraction(in: entity)
                 configureDeskInteraction(in: entity)
+                configureLampInteraction(in: entity)
             }
             logAnimationInventory(of: entity, asset: asset)
             return entity
@@ -119,6 +120,23 @@ struct BlenderAssetLoader {
         desk.generateCollisionShapes(recursive: true)
         desk.components.set(InputTargetComponent())
         print("Configured desk tap target: \(desk.name)")
+    }
+
+    private func configureLampInteraction(in root: Entity) {
+        let lampPartNames = ["Abajur", "Topo_do_Abajur"]
+        var configuredParts = 0
+        for name in lampPartNames {
+            guard let part = findEntity(named: name, in: root) else { continue }
+            part.generateCollisionShapes(recursive: true)
+            part.components.set(InputTargetComponent())
+            configuredParts += 1
+        }
+
+        if configuredParts == 0 {
+            print("Lamp interaction targets were not found in the Reality scene")
+        } else {
+            print("Configured lamp tap targets: \(configuredParts)")
+        }
     }
 
     private func findEntity(named name: String, in root: Entity) -> Entity? {

@@ -5,6 +5,7 @@ struct ContentView: View {
     let libraryModel: GalleryLibraryModel
     @State private var orbitController = OverviewOrbitController()
     @State private var scenarioAnimationController = ScenarioAnimationController()
+    @State private var sceneLightingController = SceneLightingController()
     @State private var isDragging = false
 
     var body: some View {
@@ -26,13 +27,9 @@ struct ContentView: View {
             content.add(camera)
             orbitController.attach(camera: camera, viewportSize: viewportSize)
 
-            let light = Entity()
-            light.components.set(DirectionalLightComponent(intensity: 1800))
-            light.orientation = simd_quatf(angle: -.pi / 4, axis: [1, 0, 0])
-            content.add(light)
-
             let room = await loader.load(.room)
             scenarioAnimationController.attach(to: room)
+            sceneLightingController.attach(to: room, preset: .afternoon)
             roomFallback.removeFromParent()
             content.add(room)
         } update: { _ in
@@ -59,6 +56,10 @@ struct ContentView: View {
                             pitchDegrees: 55,
                             minimumRadius: 1.15
                         )
+                        return
+                    }
+                    if lampAncestor(from: value.entity) != nil {
+                        sceneLightingController.toggleLamp()
                         return
                     }
                     guard let shelf = shelfAncestor(from: value.entity) else { return }
@@ -123,6 +124,19 @@ struct ContentView: View {
         var current: Entity? = entity
         while let candidate = current {
             if candidate.name.compare("Mesa", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+                return candidate
+            }
+            current = candidate.parent
+        }
+        return nil
+    }
+
+    private func lampAncestor(from entity: Entity) -> Entity? {
+        var current: Entity? = entity
+        while let candidate = current {
+            if ["Abajur", "Topo_do_Abajur"].contains(where: {
+                candidate.name.compare($0, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            }) {
                 return candidate
             }
             current = candidate.parent
