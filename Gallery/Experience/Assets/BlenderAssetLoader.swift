@@ -95,7 +95,14 @@ struct BlenderAssetLoader {
             return
         }
 
-        shelf.generateCollisionShapes(recursive: true)
+        // A convex hull of the entire shelf covers its openings and intercepts
+        // taps intended for boxes. Use the back panel as the shelf tap target.
+        removeCollisionShapes(from: shelf)
+        let bounds = shelf.visualBounds(relativeTo: shelf)
+        let thickness: Float = 0.02
+        let panel = ShapeResource.generateBox(size: [thickness, bounds.extents.y, bounds.extents.z])
+            .offsetBy(translation: [bounds.max.x - thickness / 2, bounds.center.y, bounds.center.z])
+        shelf.components.set(CollisionComponent(shapes: [panel]))
         shelf.components.set(InputTargetComponent())
         print("Configured shelf tap target: \(shelf.name)")
     }
@@ -149,6 +156,11 @@ struct BlenderAssetLoader {
             }
         }
         return nil
+    }
+
+    private func removeCollisionShapes(from entity: Entity) {
+        entity.components.remove(CollisionComponent.self)
+        for child in entity.children { removeCollisionShapes(from: child) }
     }
 
     private func logAnimationInventory(of root: Entity, asset: GalleryAssetID) {

@@ -1,7 +1,9 @@
 import RealityKit
 import SwiftUI
+import Observation
 
 @MainActor
+@Observable
 final class OverviewOrbitController {
     private var camera: Entity?
     private let moveCamera = MoveCamera()
@@ -27,7 +29,11 @@ final class OverviewOrbitController {
     private var zoomAtDragStart: Float?
     private var viewportSize: CGSize = .zero
     private var savedOrbitState: OrbitState?
-    private weak var focusedEntity: Entity?
+    @ObservationIgnored private weak var focusedEntity: Entity?
+    private var focusReadyAt = Date.distantPast
+
+    private(set) var isShelfFocused = false
+    var isShelfFocusReady: Bool { isShelfFocused && Date() >= focusReadyAt }
 
     private struct OrbitState {
         let target: SIMD3<Float>
@@ -60,6 +66,8 @@ final class OverviewOrbitController {
             savedOrbitState = OrbitState(target: target, yawCenter: yawCenter, yaw: yaw, pitch: pitch, radius: radius)
         }
         focusedEntity = entity
+        isShelfFocused = entity.name.compare("Estante", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        focusReadyAt = Date().addingTimeInterval(1.2)
 
         let bounds = entity.visualBounds(relativeTo: nil)
         let focusCenter = bounds.center
@@ -99,6 +107,11 @@ final class OverviewOrbitController {
         return direction / length
     }
 
+    func returnFromShelf() {
+        guard isShelfFocused else { return }
+        restorePreviousView()
+    }
+
     private func restorePreviousView() {
         guard let savedOrbitState else { return }
         target = savedOrbitState.target
@@ -108,6 +121,7 @@ final class OverviewOrbitController {
         radius = savedOrbitState.radius
         self.savedOrbitState = nil
         focusedEntity = nil
+        isShelfFocused = false
 
         let position = keepCameraOutsideWallShell(requestedCameraPosition())
         moveCamera.move(to: position, lookingAt: position + cameraForward())

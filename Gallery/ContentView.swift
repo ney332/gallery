@@ -6,6 +6,10 @@ struct ContentView: View {
     @State private var orbitController = OverviewOrbitController()
     @State private var scenarioAnimationController = ScenarioAnimationController()
     @State private var sceneLightingController = SceneLightingController()
+    @State private var boxInteractionController = BoxInteractionController()
+    @State private var windowInteractionController = WindowInteractionController()
+    @GestureState private var isPressingWindow = false
+    @Environment(\.scenePhase) private var scenePhase
     @State private var isDragging = false
 
     var body: some View {
@@ -29,7 +33,9 @@ struct ContentView: View {
 
             let room = await loader.load(.room)
             scenarioAnimationController.attach(to: room)
+            windowInteractionController.attach(to: scenarioAnimationController.entity(for: .windowGlass))
             sceneLightingController.attach(to: room, preset: .afternoon)
+            boxInteractionController.attach(to: room, camera: camera)
             roomFallback.removeFromParent()
             content.add(room)
         } update: { _ in
@@ -39,6 +45,19 @@ struct ContentView: View {
             TapGesture()
                 .targetedToAnyEntity()
                 .onEnded { value in
+                    guard !boxInteractionController.isActive,
+                          !windowInteractionController.isDragging,
+                          !windowInteractionController.contains(value.entity) else { return }
+                    if let box = boxInteractionController.box(containing: value.entity) {
+                        if !orbitController.isShelfFocused {
+                            if let shelf = scenarioAnimationController.entity(for: .archiveShelf) {
+                                orbitController.toggleFocus(on: shelf)
+                            }
+                        } else if orbitController.isShelfFocusReady {
+                            boxInteractionController.present(box, viewport: viewportSize)
+                        }
+                        return
+                    }
                     if let drawer = drawerAncestor(from: value.entity) {
                         guard scenarioAnimationController.toggleTopDrawer() else { return }
                         orbitController.toggleFocus(
@@ -53,7 +72,7 @@ struct ContentView: View {
                         orbitController.toggleFocus(
                             on: desk,
                             lookingFromFront: true,
-                            pitchDegrees: 55,
+                            pitchDegrees: 75,
                             minimumRadius: 1.15
                         )
                         return
@@ -67,8 +86,39 @@ struct ContentView: View {
                 }
         )
         .simultaneousGesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                .targetedToAnyEntity()
+                .updating($isPressingWindow) { value, state, _ in
+                    state = !boxInteractionController.isActive
+                        && windowInteractionController.contains(value.entity)
+                }
+                .onChanged { value in
+                    guard !boxInteractionController.isActive,
+                          windowInteractionController.contains(value.entity) else { return }
+                    windowInteractionController.updateDrag(
+                        translation: value.translation,
+                        viewportHeight: viewportSize.height
+                    )
+                }
+                .onEnded { _ in windowInteractionController.endDrag() }
+        )
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 8, coordinateSpace: .local)
+                .targetedToAnyEntity()
+                .onChanged { value in
+                    boxInteractionController.updateDrag(
+                        on: value.entity,
+                        translation: value.translation,
+                        viewport: viewportSize
+                    )
+                }
+                .onEnded { _ in boxInteractionController.endDrag() }
+        )
+        .simultaneousGesture(
             DragGesture(minimumDistance: 1, coordinateSpace: .local)
                 .onChanged { value in
+                    guard !boxInteractionController.isActive,
+                          !isPressingWindow, !windowInteractionController.isDragging else { return }
                     if !isDragging {
                         isDragging = true
                         orbitController.beginDrag()
@@ -81,10 +131,48 @@ struct ContentView: View {
                 }
         )
         .simultaneousGesture(
-            MagnifyGesture()
-                .onChanged { orbitController.updateZoom(magnification: $0.magnification) }
+            MagnifyGesture() //permite zoom em pinça
+                .onChanged {
+                    guard !boxInteractionController.isActive,
+                          !isPressingWindow, !windowInteractionController.isDragging else { return }
+                    orbitController.updateZoom(magnification: $0.magnification)
+                }
                 .onEnded { _ in orbitController.endZoom() }
         )
+        .overlay(alignment: .topLeading) {
+            if boxInteractionController.isActive {
+                HStack(spacing: 16) {
+                    Button {
+                        boxInteractionController.returnToShelf()
+                    } label: {
+                        Label("Voltar à estante", systemImage: "arrow.uturn.backward")
+                    }
+                    .disabled(boxInteractionController.phase == .returning)
+                    if boxInteractionController.phase == .waitingForTape {
+                        Text("Arraste a fita para cima")
+                            .font(.callout)
+                    } else if boxInteractionController.phase == .ready {
+                        Text("")
+                            .font(.callout)
+                    }
+                }
+                .padding(12)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, 24)
+                .padding(.top, 52)
+            } else if orbitController.isShelfFocused {
+                Button {
+                    orbitController.returnFromShelf()
+                } label: {
+                    Label("Voltar ao quarto", systemImage: "arrow.left")
+                        .padding(12)
+                        .frame(minHeight: 44)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 52)
+            }
+        }
         .overlay(alignment: .bottom) {
             if libraryModel.access == .denied || libraryModel.access == .restricted {
                 Text("gallery.permission.denied")
@@ -96,6 +184,16 @@ struct ContentView: View {
             }
         }
         .task { await libraryModel.load() }
+        .onChange(of: isPressingWindow) { _, isPressed in
+            if !isPressed { windowInteractionController.endDrag() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { windowInteractionController.endDrag() }
+        }
+        .onDisappear {
+            windowInteractionController.endDrag()
+            boxInteractionController.resetPresentation()
+        }
     }
 
     private func shelfAncestor(from entity: Entity) -> Entity? {
