@@ -5,6 +5,7 @@ import SwiftUI
 struct GalleryApp: App {
     private let modelContainer: ModelContainer
     @State private var libraryModel: GalleryLibraryModel
+    @State private var boxSessionState = BoxSessionState()
 
     @MainActor
     init() {
@@ -24,7 +25,7 @@ struct GalleryApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(libraryModel: libraryModel)
+            ContentView(libraryModel: libraryModel, boxSessionState: boxSessionState)
                 .modelContainer(modelContainer)
         }
     }

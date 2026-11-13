@@ -23,6 +23,7 @@ final class BoxInteractionController {
         let tapeHome: Transform
         let leftHome: Transform
         let rightHome: Transform
+        let closedBounds: BoundingBox
         let tapeWasEnabled: Bool
         let nonFlapCollisions: [CollisionSnapshot]
     }
@@ -47,12 +48,18 @@ final class BoxInteractionController {
     @ObservationIgnored private var cameraHome: Transform?
     @ObservationIgnored private var isDraggingTape = false
     @ObservationIgnored private var tapeProgress: Float = 0
+    private let session: BoxSessionState
+
+    init(session: BoxSessionState) {
+        self.session = session
+    }
 
     /// Downward angle for inspecting a box with its opening facing upward.
     private let inspectionPitchDegrees: Float = 65
 
     func attach(to root: Entity, camera: Entity) {
         resetPresentation()
+        let previousRigs = rigs
         rigs.removeAll()
         self.camera = camera
 
@@ -64,15 +71,25 @@ final class BoxInteractionController {
                 print("Missing box rig or parts: \(name)")
                 continue
             }
+            // Reattaching the same entities must not capture opened flaps as
+            // their original closed transforms.
+            if let existing = previousRigs[name], existing.box === box {
+                rigs[name] = existing
+                restoreToShelf(existing)
+                continue
+            }
             applyBlackTapeMaterial(to: tape)
             box.generateCollisionShapes(recursive: true)
-            rigs[name] = Rig(
+            let rig = Rig(
                 box: box, tape: tape, left: left, right: right,
                 home: box.transform, tapeHome: tape.transform,
                 leftHome: left.transform, rightHome: right.transform,
+                closedBounds: box.visualBounds(relativeTo: box),
                 tapeWasEnabled: tape.isEnabled,
                 nonFlapCollisions: collisions(in: box, excluding: [tape, left, right])
             )
+            rigs[name] = rig
+            applySessionState(to: rig)
             for target in [box, tape, left, right] {
                 target.components.set(InputTargetComponent())
             }
@@ -104,7 +121,9 @@ final class BoxInteractionController {
         guard phase == .idle, let rig = rigs[box.name], let camera else { return }
         selected = rig
         phase = .approaching
-        progress = [.left: 0, .right: 0]
+        let state = session[rig.box.name]
+        progress = [.left: state.leftOpenAmount, .right: state.rightOpenAmount]
+        applySessionState(to: rig)
         dragSide = nil
         isDraggingTape = false
         tapeProgress = 0
@@ -133,7 +152,9 @@ final class BoxInteractionController {
 
         // Reserve enough screen width for both fully opened flaps, including
         // portrait layouts and the user's current camera field of view.
-        let bounds = box.visualBounds(relativeTo: box)
+        // Opening the flaps changes visualBounds; always frame using the
+        // original closed dimensions so revisiting a box keeps the same size.
+        let bounds = rig.closedBounds
         let fov = camera.components[PerspectiveCameraComponent.self]?.fieldOfViewInDegrees ?? 50.2
         let tanVertical = tan(fov * .pi / 360)
         let aspect = max(Float(viewport.width / max(viewport.height, 1)), 0.25)
@@ -157,7 +178,7 @@ final class BoxInteractionController {
             do {
                 try await Task.sleep(for: .seconds(0.95))
                 guard let self else { return }
-                self.phase = .waitingForTape
+                self.phase = self.session[rig.box.name].isTapeRemoved ? .ready : .waitingForTape
             } catch { /* A return or a scene reload cancels the sequence. */ }
         }
     }
@@ -188,6 +209,9 @@ final class BoxInteractionController {
             rig.tape.move(to: rig.tapeHome, relativeTo: rig.box, duration: 0.2, timingFunction: .easeInOut)
             return
         }
+        // Commit the completed gesture before its settling animation, so
+        // returning or reloading the scene cannot put the removed tape back.
+        session[rig.box.name].isTapeRemoved = true
         phase = .removingTape
         rig.tape.move(to: tapeTransform(amount: 1, rig: rig), relativeTo: rig.box,
                       duration: 0.25, timingFunction: .easeOut)
@@ -233,6 +257,7 @@ final class BoxInteractionController {
         let travel = max(Float(viewportWidth) * 0.20, 100)
         let amount = min(max(dragStartProgress + Float(translation.width) * side.sign / travel, 0), 1)
         progress[side] = amount
+        saveFlapProgress(side, amount: amount, rig: rig)
         flap(side, rig: rig).transform = flapTransform(side, amount: amount, rig: rig)
     }
 
@@ -240,6 +265,7 @@ final class BoxInteractionController {
         guard let side = dragSide, let rig = selected else { return }
         let amount: Float = progress[side, default: 0] >= 0.35 ? 1 : 0
         progress[side] = amount
+        saveFlapProgress(side, amount: amount, rig: rig)
         flap(side, rig: rig).move(
             to: flapTransform(side, amount: amount, rig: rig),
             relativeTo: rig.box, duration: 0.22, timingFunction: .easeInOut
@@ -254,21 +280,22 @@ final class BoxInteractionController {
         isDraggingTape = false
         phase = .returning
         rig.box.stopAllAnimations(recursive: true)
+        markFlapsClosed(in: rig)
+        rig.tape.transform = rig.tapeHome
+        rig.tape.isEnabled = rig.tapeWasEnabled && !session[rig.box.name].isTapeRemoved
         rig.left.move(to: rig.leftHome, relativeTo: rig.box, duration: 0.25, timingFunction: .easeInOut)
         rig.right.move(to: rig.rightHome, relativeTo: rig.box, duration: 0.25, timingFunction: .easeInOut)
         sequence = Task { [weak self] in
             do {
                 try await Task.sleep(for: .seconds(0.25))
-                rig.tape.transform = rig.tapeHome
-                rig.tape.isEnabled = rig.tapeWasEnabled
+                guard let self else { return }
                 rig.box.move(to: rig.home, relativeTo: rig.box.parent, duration: 0.9, timingFunction: .easeInOut)
-                if let self, let camera = self.camera, let home = self.cameraHome {
+                if let camera = self.camera, let home = self.cameraHome {
                     camera.stopAllAnimations(recursive: false)
                     camera.move(to: home, relativeTo: camera.parent, duration: 0.9, timingFunction: .easeInOut)
                 }
                 try await Task.sleep(for: .seconds(0.9))
-                guard let self else { return }
-                self.restoreImmediately(rig)
+                self.restoreToShelf(rig)
                 self.restoreCamera()
                 self.selected = nil
                 self.phase = .idle
@@ -279,7 +306,10 @@ final class BoxInteractionController {
     func resetPresentation() {
         sequence?.cancel()
         sequence = nil
-        if let selected { restoreImmediately(selected) }
+        if let selected {
+            markFlapsClosed(in: selected)
+            restoreToShelf(selected)
+        }
         restoreCamera()
         selected = nil
         dragSide = nil
@@ -319,13 +349,32 @@ final class BoxInteractionController {
         return transform
     }
 
-    private func restoreImmediately(_ rig: Rig) {
+    private func saveFlapProgress(_ side: Side, amount: Float, rig: Rig) {
+        if side == .left {
+            session[rig.box.name].leftOpenAmount = amount
+        } else {
+            session[rig.box.name].rightOpenAmount = amount
+        }
+    }
+
+    private func markFlapsClosed(in rig: Rig) {
+        session[rig.box.name].leftOpenAmount = 0
+        session[rig.box.name].rightOpenAmount = 0
+        progress = [.left: 0, .right: 0]
+    }
+
+    private func applySessionState(to rig: Rig) {
+        let state = session[rig.box.name]
+        rig.tape.transform = rig.tapeHome
+        rig.tape.isEnabled = rig.tapeWasEnabled && !state.isTapeRemoved
+        rig.left.transform = flapTransform(.left, amount: state.leftOpenAmount, rig: rig)
+        rig.right.transform = flapTransform(.right, amount: state.rightOpenAmount, rig: rig)
+    }
+
+    private func restoreToShelf(_ rig: Rig) {
         rig.box.stopAllAnimations(recursive: true)
         rig.box.transform = rig.home
-        rig.tape.transform = rig.tapeHome
-        rig.tape.isEnabled = rig.tapeWasEnabled
-        rig.left.transform = rig.leftHome
-        rig.right.transform = rig.rightHome
+        applySessionState(to: rig)
         for collision in rig.nonFlapCollisions {
             collision.entity.components.set(collision.component)
         }

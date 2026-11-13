@@ -6,11 +6,16 @@ struct ContentView: View {
     @State private var orbitController = OverviewOrbitController()
     @State private var scenarioAnimationController = ScenarioAnimationController()
     @State private var sceneLightingController = SceneLightingController()
-    @State private var boxInteractionController = BoxInteractionController()
+    @State private var boxInteractionController: BoxInteractionController
     @State private var windowInteractionController = WindowInteractionController()
     @GestureState private var isPressingWindow = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var isDragging = false
+
+    init(libraryModel: GalleryLibraryModel, boxSessionState: BoxSessionState) {
+        self.libraryModel = libraryModel
+        _boxInteractionController = State(initialValue: BoxInteractionController(session: boxSessionState))
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -247,7 +252,7 @@ struct ContentView: View {
     ContentView(libraryModel: GalleryLibraryModel(
         photoRepository: PhotoKitLibraryRepository(),
         annotationRepository: PreviewAnnotationRepository()
-    ))
+    ), boxSessionState: BoxSessionState())
 }
 
 private struct PreviewAnnotationRepository: AnnotationRepository {
