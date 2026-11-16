@@ -3,6 +3,7 @@ import Foundation
 enum GalleryAssetID: String, CaseIterable, Sendable {
     case room
     case cardboardBox
+    case albumCover
 }
 
 struct AssetDefinition: Sendable {
@@ -19,6 +20,13 @@ struct AssetDefinition: Sendable {
 
 enum AssetManifest {
     static let definitions: [GalleryAssetID: AssetDefinition] = [
+        .albumCover: AssetDefinition(
+            fileName: "albumteste",
+            fileExtension: "usdz",
+            version: 1,
+            logicalEntityName: "AlbumCoverPrototype",
+            animationNames: [:]
+        ),
         .room: AssetDefinition(
             fileName: "world",
             fileExtension: "reality",

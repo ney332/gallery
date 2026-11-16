@@ -36,6 +36,11 @@ struct BlenderAssetLoader {
             return makeFallbackRoom()
         case .cardboardBox:
             return makeFallbackBox()
+        case .albumCover:
+            return ModelEntity(
+                mesh: .generateBox(size: [0.36, 0.285, 0.025]),
+                materials: [SimpleMaterial(color: .brown, roughness: 0.8, isMetallic: false)]
+            )
         }
     }
 

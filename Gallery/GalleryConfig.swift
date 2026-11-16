@@ -1,6 +1,12 @@
 import Foundation
 
 enum GalleryConfig {
+    static let albumCoverWidth: Float = 0.36
+    static let albumPageHeight: Float = 0.285
+    static let albumViewingDistance: Float = 0.55
+    static let albumSwipeThreshold: CGFloat = 55
+    static let albumPageTextureWidth: CGFloat = 2048
+    static let albumPhotoTargetSize = CGSize(width: 1200, height: 1600)
     static let minimumSupportedOS = "26.0"
     // Vertical field of view stays bounded in portrait, preventing the upper
     // edge of the image from looking through the nearby ceiling geometry.

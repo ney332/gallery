@@ -11,6 +11,12 @@ final class BoxInteractionController {
     enum Phase { case idle, approaching, waitingForTape, removingTape, ready, returning }
     private(set) var phase: Phase = .idle
     var isActive: Bool { phase != .idle }
+    var canAccessAlbums: Bool {
+        phase == .ready && dragSide == nil
+            && progress[.left, default: 0] >= 0.99 && progress[.right, default: 0] >= 0.99
+    }
+    var selectedBox: Entity? { selected?.box }
+    var selectedBoxBounds: BoundingBox? { selected?.closedBounds }
 
     static let boxNames = ["P3_Caixa_M"] + (1...8).map { "P3_Caixa_M_00\($0)" }
 
@@ -42,9 +48,9 @@ final class BoxInteractionController {
     @ObservationIgnored private var rigs: [String: Rig] = [:]
     @ObservationIgnored private var selected: Rig?
     @ObservationIgnored private var sequence: Task<Void, Never>?
-    @ObservationIgnored private var dragSide: Side?
+    private var dragSide: Side?
     @ObservationIgnored private var dragStartProgress: Float = 0
-    @ObservationIgnored private var progress: [Side: Float] = [:]
+    private var progress: [Side: Float] = [:]
     @ObservationIgnored private var cameraHome: Transform?
     @ObservationIgnored private var isDraggingTape = false
     @ObservationIgnored private var tapeProgress: Float = 0

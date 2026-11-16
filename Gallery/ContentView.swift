@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var scenarioAnimationController = ScenarioAnimationController()
     @State private var sceneLightingController = SceneLightingController()
     @State private var boxInteractionController: BoxInteractionController
+    @State private var albumController = AlbumBookController()
     @State private var windowInteractionController = WindowInteractionController()
     @GestureState private var isPressingWindow = false
     @Environment(\.scenePhase) private var scenePhase
@@ -37,19 +38,30 @@ struct ContentView: View {
             orbitController.attach(camera: camera, viewportSize: viewportSize)
 
             let room = await loader.load(.room)
+            albumController.clearAlbums()
             scenarioAnimationController.attach(to: room)
             windowInteractionController.attach(to: scenarioAnimationController.entity(for: .windowGlass))
             sceneLightingController.attach(to: room, preset: .afternoon)
             boxInteractionController.attach(to: room, camera: camera)
             roomFallback.removeFromParent()
             content.add(room)
+            let albumPrototype = await loader.load(.albumCover)
+            albumController.attach(prototype: albumPrototype, camera: camera)
+            albumController.updateViewport(viewportSize)
         } update: { _ in
             orbitController.updateViewport(viewportSize)
+            albumController.updateViewport(viewportSize)
         }
         .simultaneousGesture(
             TapGesture()
                 .targetedToAnyEntity()
                 .onEnded { value in
+                    if albumController.isReading { return }
+                    if boxInteractionController.canAccessAlbums,
+                       let id = albumController.albumID(containing: value.entity) {
+                        albumController.select(id)
+                        return
+                    }
                     guard !boxInteractionController.isActive,
                           !windowInteractionController.isDragging,
                           !windowInteractionController.contains(value.entity) else { return }
@@ -111,13 +123,16 @@ struct ContentView: View {
             DragGesture(minimumDistance: 8, coordinateSpace: .local)
                 .targetedToAnyEntity()
                 .onChanged { value in
+                    guard !albumController.isReading else { return }
                     boxInteractionController.updateDrag(
                         on: value.entity,
                         translation: value.translation,
                         viewport: viewportSize
                     )
                 }
-                .onEnded { _ in boxInteractionController.endDrag() }
+                .onEnded { _ in
+                    if !albumController.isReading { boxInteractionController.endDrag() }
+                }
         )
         .simultaneousGesture(
             DragGesture(minimumDistance: 1, coordinateSpace: .local)
@@ -130,7 +145,15 @@ struct ContentView: View {
                     }
                     orbitController.updateDrag(translation: value.translation)
                 }
-                .onEnded { _ in
+                .onEnded { value in
+                    if albumController.isReading {
+                        let movement = value.translation
+                        if abs(movement.width) > GalleryConfig.albumSwipeThreshold,
+                           abs(movement.width) > abs(movement.height) {
+                            albumController.turnPage(by: movement.width < 0 ? 1 : -1)
+                        }
+                        return
+                    }
                     isDragging = false
                     orbitController.endDrag()
                 }
@@ -145,9 +168,22 @@ struct ContentView: View {
                 .onEnded { _ in orbitController.endZoom() }
         )
         .overlay(alignment: .topLeading) {
-            if boxInteractionController.isActive {
+            if albumController.isReading {
+                HStack(spacing: 16) {
+                    Button { albumController.closeBook() } label: {
+                        Label("album.back.box", systemImage: "arrow.left")
+                    }
+                    Text(albumController.activeAlbum?.title ?? "")
+                        .font(.headline)
+                }
+                .padding(12)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, 24)
+                .padding(.top, 52)
+            } else if boxInteractionController.isActive {
                 HStack(spacing: 16) {
                     Button {
+                        albumController.clearAlbums()
                         boxInteractionController.returnToShelf()
                     } label: {
                         Label("Voltar à estante", systemImage: "arrow.uturn.backward")
@@ -179,7 +215,11 @@ struct ContentView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if libraryModel.access == .denied || libraryModel.access == .restricted {
+            if albumController.isReading {
+                bookControls
+            } else if boxInteractionController.canAccessAlbums {
+                albumPicker
+            } else if libraryModel.access == .denied || libraryModel.access == .restricted {
                 Text("gallery.permission.denied")
                     .font(.callout)
                     .padding(.horizontal, 16)
@@ -189,6 +229,11 @@ struct ContentView: View {
             }
         }
         .task { await libraryModel.load() }
+        .onChange(of: boxInteractionController.canAccessAlbums) { _, _ in refreshAlbums() }
+        .onChange(of: albumController.isPrepared) { _, _ in refreshAlbums() }
+        .onChange(of: libraryModel.years) { _, _ in refreshAlbums() }
+        .onChange(of: libraryModel.favorites) { _, _ in refreshAlbums() }
+        .onChange(of: libraryModel.access) { _, _ in refreshAlbums() }
         .onChange(of: isPressingWindow) { _, isPressed in
             if !isPressed { windowInteractionController.endDrag() }
         }
@@ -197,8 +242,82 @@ struct ContentView: View {
         }
         .onDisappear {
             windowInteractionController.endDrag()
+            albumController.clearAlbums()
             boxInteractionController.resetPresentation()
         }
+    }
+
+    private func refreshAlbums() {
+        guard boxInteractionController.canAccessAlbums,
+              let box = boxInteractionController.selectedBox,
+              let bounds = boxInteractionController.selectedBoxBounds,
+              let slot = BoxInteractionController.boxNames.firstIndex(of: box.name) else {
+            albumController.clearAlbums()
+            return
+        }
+        let hasAccess = libraryModel.access == .authorized || libraryModel.access == .limited
+        albumController.showAlbums(hasAccess ? libraryModel.albums(forBoxSlot: slot) : [], in: box, bounds: bounds)
+    }
+
+    private var albumPicker: some View {
+        VStack(spacing: 10) {
+            if libraryModel.isLoading || !albumController.isPrepared {
+                ProgressView("album.loading")
+            } else if libraryModel.access == .denied || libraryModel.access == .restricted {
+                Text("gallery.permission.denied")
+            } else if libraryModel.loadFailed {
+                Text("album.library.failed")
+                Button("album.retry") { Task { await libraryModel.load() } }
+            } else if albumController.albums.isEmpty {
+                Text("album.box.empty")
+            } else {
+                Text("album.select.hint").font(.callout)
+                ScrollView(.horizontal) {
+                    HStack {
+                        ForEach(albumController.albums) { album in
+                            Button {
+                                albumController.select(album.id)
+                            } label: {
+                                Label(album.title, systemImage: albumController.selectedAlbumID == album.id ? "book.fill" : "book.closed")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 24)
+        .padding(.bottom, 28)
+    }
+
+    private var bookControls: some View {
+        VStack(spacing: 8) {
+            if albumController.isLoadingPage { ProgressView("album.loading") }
+            if albumController.hasUnavailablePhotos {
+                Button("album.retry") { albumController.retryPage() }
+            }
+            HStack(spacing: 24) {
+                Button { albumController.turnPage(by: -1) } label: {
+                    Label("album.previous", systemImage: "chevron.left")
+                }
+                .disabled(!albumController.canGoBack)
+                if albumController.pageIndex == 0 {
+                    Text("album.cover")
+                } else {
+                    Text(String(format: String(localized: "album.page.status"), albumController.pageIndex, albumController.pageCount))
+                }
+                Button { albumController.turnPage(by: 1) } label: {
+                    Label("album.next", systemImage: "chevron.right")
+                }
+                .disabled(!albumController.canGoForward)
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 24)
+        .padding(.bottom, 28)
     }
 
     private func shelfAncestor(from entity: Entity) -> Entity? {
