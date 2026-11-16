@@ -21,9 +21,9 @@ struct AssetDefinition: Sendable {
 enum AssetManifest {
     static let definitions: [GalleryAssetID: AssetDefinition] = [
         .albumCover: AssetDefinition(
-            fileName: "albumteste",
+            fileName: "album",
             fileExtension: "usdz",
-            version: 1,
+            version: 2,
             logicalEntityName: "AlbumCoverPrototype",
             animationNames: [:]
         ),

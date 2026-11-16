@@ -145,12 +145,12 @@
         }
       }
     },
-    "album.page.status": {
+    "album.photo.range": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Página %ld de %ld"
+            "value": "Fotos %ld–%ld de %ld"
           }
         }
       }

@@ -297,19 +297,25 @@ struct ContentView: View {
             if albumController.isLoadingPage { ProgressView("album.loading") }
             if albumController.hasUnavailablePhotos {
                 Button("album.retry") { albumController.retryPage() }
+                    .disabled(albumController.isTurningPage)
             }
             HStack(spacing: 24) {
                 Button { albumController.turnPage(by: -1) } label: {
                     Label("album.previous", systemImage: "chevron.left")
+                        .frame(minWidth: 44, minHeight: 44)
                 }
                 .disabled(!albumController.canGoBack)
                 if albumController.pageIndex == 0 {
                     Text("album.cover")
                 } else {
-                    Text(String(format: String(localized: "album.page.status"), albumController.pageIndex, albumController.pageCount))
+                    Text(String(format: String(localized: "album.photo.range"),
+                                (albumController.pageIndex - 1) * 2 + 1,
+                                min(albumController.pageIndex * 2, albumController.activeAlbum?.photos.count ?? 0),
+                                albumController.activeAlbum?.photos.count ?? 0))
                 }
                 Button { albumController.turnPage(by: 1) } label: {
                     Label("album.next", systemImage: "chevron.right")
+                        .frame(minWidth: 44, minHeight: 44)
                 }
                 .disabled(!albumController.canGoForward)
             }

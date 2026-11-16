@@ -1,8 +1,10 @@
 import Foundation
 
 enum GalleryConfig {
-    static let albumCoverWidth: Float = 0.36
-    static let albumPageHeight: Float = 0.285
+    static let albumCoverWidth: Float = 0.285
+    static let albumPageHeight: Float = 0.36
+    static let albumPageTurnDuration: TimeInterval = 0.65
+    static let albumCoverOpenDuration: TimeInterval = 0.8
     static let albumViewingDistance: Float = 0.55
     static let albumSwipeThreshold: CGFloat = 55
     static let albumPageTextureWidth: CGFloat = 2048

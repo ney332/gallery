@@ -2,7 +2,7 @@ import Observation
 import RealityKit
 import UIKit
 
-/// Temporary covers and procedural photo pages; independent of Blender clips.
+/// Monthly albums, photo loading and bounded navigation through a reusable page rig.
 @MainActor
 @Observable
 final class AlbumBookController {
@@ -15,8 +15,9 @@ final class AlbumBookController {
     private(set) var hasUnavailablePhotos = false
     var isReading: Bool { activeAlbum != nil }
     var pageCount: Int { pages.count }
-    var canGoBack: Bool { pageIndex > 0 }
-    var canGoForward: Bool { pageIndex < pages.count }
+    private(set) var isTurningPage = false
+    var canGoBack: Bool { !isTurningPage && pageIndex > 0 }
+    var canGoForward: Bool { !isTurningPage && pageIndex < pages.count }
 
     @ObservationIgnored private var prototype: Entity?
     @ObservationIgnored private weak var camera: Entity?
@@ -26,17 +27,18 @@ final class AlbumBookController {
     @ObservationIgnored private var albumEntities: [String: Entity] = [:]
     @ObservationIgnored private var albumHomes: [String: SIMD3<Float>] = [:]
     @ObservationIgnored private var book: Entity?
-    @ObservationIgnored private var bookCover: Entity?
-    @ObservationIgnored private var pageRoot: Entity?
-    @ObservationIgnored private var photoSurface: ModelEntity?
+    @ObservationIgnored private var animationRig: AlbumAnimationController?
+    @ObservationIgnored private var turnTask: Task<Void, Never>?
     @ObservationIgnored private var pageTask: Task<Void, Never>?
-    @ObservationIgnored private var pageLoadID = UUID()
-    @ObservationIgnored private var pageImages: [UIImage?] = []
+    @ObservationIgnored private var readingSessionID = UUID()
+    @ObservationIgnored private var pageCache = AlbumPageCache()
+    @ObservationIgnored private var pendingContent: [AlbumContent]?
+    @ObservationIgnored private var boxBounds: BoundingBox?
+    @ObservationIgnored private var failedTurnTarget: Int?
     @ObservationIgnored private var pages: [PhotoPage] = []
     @ObservationIgnored private var rememberedPages: [String: Int] = [:]
     @ObservationIgnored private var rememberedSelections: [String: String] = [:]
     @ObservationIgnored private var viewport = CGSize.zero
-    @ObservationIgnored private var thumbnails = PhotoThumbnailCache()
 
     func attach(prototype: Entity, camera: Entity) {
         clearAlbums()
@@ -47,34 +49,49 @@ final class AlbumBookController {
 
     func showAlbums(_ content: [AlbumContent], in box: Entity, bounds: BoundingBox) {
         guard isPrepared else { return }
-        if self.box === box, albums == content { return }
+        if self.box === box, albums == content {
+            pendingContent = nil
+            return
+        }
+        if self.box === box, isReading, !content.isEmpty {
+            // A PhotoKit refresh must not dismantle the book during reading.
+            pendingContent = content
+            return
+        }
         clearAlbums()
         self.box = box
+        boxBounds = bounds
         albums = content.filter { !$0.photos.isEmpty }
         guard !albums.isEmpty else { return }
 
         let tray = Entity()
-        tray.name = "TemporaryMonthlyAlbums"
+        tray.name = "MonthlyAlbums"
         box.addChild(tray)
         self.tray = tray
-        let columns = min(albums.count, 3)
-        let rows = (albums.count + columns - 1) / columns
-        let cellWidth = bounds.extents.y * 0.84 / Float(columns)
-        let cellHeight = bounds.extents.x * 0.84 / Float(rows)
+        let sample = makeCover().visualBounds(relativeTo: nil)
+        let thickness = max(sample.extents.z, 0.005)
+        let slotWidth = bounds.extents.y * 0.86 / Float(max(12, albums.count))
+        let scale = min(bounds.extents.x * 0.86 / max(sample.extents.y, 0.001),
+                        bounds.extents.z * 0.84 / max(sample.extents.x, 0.001),
+                        slotWidth * 0.9 / thickness)
+        let spacing = thickness * scale + slotWidth * 0.1
+        // Box local +Y points screen-left; +Z is up. Put the spine on top,
+        // the long edge along box X and the thickness along box Y.
+        let orientation = simd_quatf(simd_float3x3(columns: (
+            SIMD3<Float>(0, 0, -1), SIMD3<Float>(1, 0, 0), SIMD3<Float>(0, -1, 0)
+        )))
         for (index, album) in albums.enumerated() {
             let entity = makeCover()
-            entity.name = "TemporaryAlbum.\(album.id)"
-            let scale = min(cellWidth / GalleryConfig.albumCoverWidth,
-                            cellHeight / GalleryConfig.albumPageHeight) * 0.82
+            entity.name = "MonthlyAlbum.\(album.id)"
             entity.scale = SIMD3(repeating: scale)
-            entity.orientation = simd_quatf(angle: -.pi / 2, axis: [0, 0, 1])
+            entity.orientation = orientation
             entity.position = [
-                bounds.center.x + (Float(rows - 1) / 2 - Float(index / columns)) * cellHeight,
-                bounds.center.y + (Float(columns - 1) / 2 - Float(index % columns)) * cellWidth,
-                bounds.max.z - 0.055
+                bounds.center.x,
+                bounds.center.y + (Float(albums.count - 1) / 2 - Float(index)) * spacing,
+                bounds.min.z + bounds.extents.z * 0.08 + sample.extents.x * scale / 2
             ]
             entity.components.set(CollisionComponent(shapes: [
-                .generateBox(size: [GalleryConfig.albumCoverWidth, GalleryConfig.albumPageHeight, 0.065])
+                .generateBox(size: sample.extents)
             ]))
             entity.components.set(InputTargetComponent())
             tray.addChild(entity)
@@ -108,45 +125,103 @@ final class AlbumBookController {
     }
 
     func updateViewport(_ size: CGSize) {
+        guard viewport != size else { return }
         viewport = size
         frameBook()
     }
 
     func turnPage(by delta: Int) {
-        guard isReading else { return }
-        let next = min(max(pageIndex + delta, 0), pages.count)
+        guard isReading, !isTurningPage, delta != 0, let rig = animationRig else { return }
+        let direction = delta > 0 ? 1 : -1
+        let next = min(max(pageIndex + direction, 0), pages.count)
         guard next != pageIndex else { return }
-        pageIndex = next
-        rememberPage()
+        let previous = pageIndex
+        let session = readingSessionID
+        failedTurnTarget = nil
+        pageTask?.cancel()
+        isTurningPage = true
+        pageCache.keepWindow(around: next)
+        isLoadingPage = next > 0 && pageCache.materials(at: next) == nil
+        turnTask = Task { [weak self] in
+            guard let self else { return }
+            // Keep the current photos, geometry and camera framing visible while
+            // waiting for the target. A ready cached spread needs no PhotoKit wait.
+            let materials = next > 0 ? await self.pageCache.preparedMaterials(at: next) : nil
+            guard !Task.isCancelled, self.readingSessionID == session else { return }
+            self.isLoadingPage = false
+            if next > 0 && materials == nil {
+                self.failedTurnTarget = next
+                self.hasUnavailablePhotos = true
+                self.isTurningPage = false
+                self.turnTask = nil
+                return
+            }
+            self.pageCache.setAnimationActive(true)
+            if previous > 0 && next > 0 { rig.beginTurn(by: direction) }
+            if let materials { rig.setPhotos(materials) }
+            if previous == 0 || next == 0 {
+                // Framing changes only when opening/closing the cover.
+                self.frameBook(open: next > 0, animated: true)
+                await rig.animateCover(open: next > 0)
+            } else {
+                await rig.animateTurn()
+            }
+            guard !Task.isCancelled, self.readingSessionID == session else { return }
+            self.pageIndex = next
+            self.rememberPage()
+            self.isTurningPage = false
+            self.turnTask = nil
+            self.pageCache.setAnimationActive(false)
+            self.applyPreparedPage(next)
+            self.pageCache.keepWindow(around: next)
+        }
+    }
+
+    func retryPage() {
+        guard isReading, !isTurningPage else { return }
+        if let target = failedTurnTarget {
+            pageCache.retry(target)
+            turnPage(by: target - pageIndex)
+            return
+        }
+        guard pageIndex > 0 else { return }
+        pageCache.retry(pageIndex)
         loadPage()
     }
 
-    func retryPage() { if isReading { loadPage() } }
-
     func closeBook() {
         rememberPage()
+        turnTask?.cancel()
+        turnTask = nil
+        isTurningPage = false
+        failedTurnTarget = nil
+        book?.stopAllAnimations(recursive: true)
         pageTask?.cancel()
-        pageLoadID = UUID()
-        pageImages = []
+        readingSessionID = UUID()
+        pageCache.clear()
         pageTask = nil
         if isReading { box?.isEnabled = boxWasEnabled }
         book?.removeFromParent()
         book = nil
-        bookCover = nil
-        pageRoot = nil
-        photoSurface = nil
+        animationRig = nil
         activeAlbum = nil
         pages = []
         pageIndex = 0
         isLoadingPage = false
         hasUnavailablePhotos = false
+        if let content = pendingContent, let box, let bounds = boxBounds {
+            pendingContent = nil
+            showAlbums(content, in: box, bounds: bounds)
+        }
     }
 
     func clearAlbums() {
+        pendingContent = nil
         closeBook()
         tray?.removeFromParent()
         tray = nil
         box = nil
+        boxBounds = nil
         albums = []
         selectedAlbumID = nil
         albumEntities.removeAll()
@@ -161,72 +236,51 @@ final class AlbumBookController {
     }
 
     private func open(_ album: AlbumContent) {
-        guard let camera, let box else { return }
+        guard let camera, let box, let prototype else { return }
         activeAlbum = album
+        readingSessionID = UUID()
         pages = PhotoPage.paginate(album.photos)
+        pageCache.configure(title: album.title, pages: pages)
+        pageCache.onUpdate = { [weak self] index in self?.applyPreparedPage(index) }
         pageIndex = min(rememberedPages[album.id, default: 0], pages.count)
         boxWasEnabled = box.isEnabled
         box.isEnabled = false
+        let rig = AlbumAnimationController(prototype: prototype)
+        animationRig = rig
         let book = Entity()
-        book.name = "TemporaryPhotoBook"
+        book.name = "PhotoAlbum"
         camera.addChild(book)
+        book.addChild(rig.root)
         self.book = book
-        let cover = makeCover()
-        book.addChild(cover)
-        bookCover = cover
-
-        let pageRoot = Entity()
-        let paper = ModelEntity(mesh: .generateBox(size: [GalleryConfig.albumCoverWidth, GalleryConfig.albumPageHeight, 0.012]),
-                                materials: [SimpleMaterial(color: .init(white: 0.9, alpha: 1), roughness: 1, isMetallic: false)])
-        pageRoot.addChild(paper)
-        let surface = ModelEntity(mesh: .generatePlane(width: GalleryConfig.albumCoverWidth, height: GalleryConfig.albumPageHeight),
-                                  materials: [UnlitMaterial(color: .white)])
-        surface.position.z = 0.007
-        pageRoot.addChild(surface)
-        book.addChild(pageRoot)
-        self.pageRoot = pageRoot
-        photoSurface = surface
+        rig.setOpen(pageIndex > 0)
         frameBook()
         loadPage()
     }
 
     private func makeCover() -> Entity {
-        let wrapper = Entity()
-        guard let model = prototype?.clone(recursive: true) else { return wrapper }
-        // albumteste's local geometry is XY with a Z thickness. Remove the
-        // exported root-axis conversion, then center its offset mesh.
-        model.transform = Transform()
-        removeInteraction(from: model)
-        let bounds = model.visualBounds(relativeTo: model)
-        let scale = min(GalleryConfig.albumCoverWidth / max(bounds.extents.x, 0.001),
-                        GalleryConfig.albumPageHeight / max(bounds.extents.y, 0.001))
-        model.scale = SIMD3(repeating: scale)
-        model.position = -bounds.center * scale
-        wrapper.addChild(model)
-        return wrapper
+        guard let prototype else { return Entity() }
+        return AlbumAnimationController.normalizedModel(from: prototype)
     }
 
-    private func removeInteraction(from entity: Entity) {
-        entity.components.remove(CollisionComponent.self)
-        entity.components.remove(InputTargetComponent.self)
-        entity.components.remove(PerspectiveCameraComponent.self)
-        entity.components.remove(OrthographicCameraComponent.self)
-        entity.components.remove(DirectionalLightComponent.self)
-        entity.components.remove(PointLightComponent.self)
-        entity.components.remove(SpotLightComponent.self)
-        for child in entity.children { removeInteraction(from: child) }
-    }
-
-    private func frameBook() {
-        guard let book, let camera else { return }
+    private func frameBook(open: Bool? = nil, animated: Bool = false) {
+        guard let book, let camera, let rig = animationRig else { return }
         let fov = camera.components[PerspectiveCameraComponent.self]?.fieldOfViewInDegrees ?? 50.2
         let distance = GalleryConfig.albumViewingDistance
         let height = 2 * distance * tan(fov * .pi / 360)
         let aspect = Float(viewport.width / max(viewport.height, 1))
-        let scale = min(height * max(aspect, 0.25) * 0.82 / GalleryConfig.albumCoverWidth,
+        let isOpen = open ?? (pageIndex > 0)
+        let width = isOpen ? rig.readingWidth : rig.closedBounds.extents.x
+        let scale = min(height * max(aspect, 0.25) * 0.82 / max(width, 0.001),
                         height * 0.65 / GalleryConfig.albumPageHeight)
-        book.scale = SIMD3(repeating: scale)
-        book.position = [0, -height * 0.025, -distance]
+        let center = isOpen ? rig.readingCenter : SIMD3<Float>.zero
+        let destination = Transform(scale: SIMD3(repeating: scale), rotation: simd_quatf(angle: 0, axis: [0, 1, 0]),
+                                    translation: SIMD3<Float>(0, -height * 0.025, -distance) - center * scale)
+        if animated {
+            book.move(to: destination, relativeTo: camera,
+                      duration: GalleryConfig.albumCoverOpenDuration, timingFunction: .easeInOut)
+        } else {
+            book.transform = destination
+        }
     }
 
     private func rememberPage() {
@@ -235,54 +289,34 @@ final class AlbumBookController {
 
     private func loadPage() {
         pageTask?.cancel()
-        pageLoadID = UUID()
-        let loadID = pageLoadID
-        pageImages = []
-        bookCover?.isEnabled = pageIndex == 0
-        pageRoot?.isEnabled = pageIndex > 0
-        isLoadingPage = false
-        hasUnavailablePhotos = false
-        guard pageIndex > 0, pages.indices.contains(pageIndex - 1), let album = activeAlbum else { return }
-        let page = pages[pageIndex - 1]
-        pageImages = Array(repeating: nil, count: page.photos.count)
-        let requestedIndex = pageIndex
+        pageCache.keepWindow(around: pageIndex)
+        guard pageIndex > 0 else {
+            isLoadingPage = false
+            hasUnavailablePhotos = false
+            return
+        }
+        if pageCache.materials(at: pageIndex) != nil {
+            applyPreparedPage(pageIndex)
+            return
+        }
         isLoadingPage = true
-        setPageTexture(PhotoPageRenderer.image(title: album.title, page: page, images: [], loading: true))
+        let index = pageIndex
+        let session = readingSessionID
         pageTask = Task { [weak self] in
             guard let self else { return }
-            async let first = self.pageThumbnail(for: page.photos.first, slot: 0, page: page, title: album.title, loadID: loadID)
-            async let second = self.pageThumbnail(for: page.photos.count > 1 ? page.photos[1] : nil,
-                                                 slot: 1, page: page, title: album.title, loadID: loadID)
-            let loaded = await (first, second)
-            guard !Task.isCancelled, self.pageLoadID == loadID,
-                  self.activeAlbum?.id == album.id, self.pageIndex == requestedIndex else { return }
-            let images: [UIImage?] = page.photos.count > 1 ? [loaded.0, loaded.1] : [loaded.0]
-            self.hasUnavailablePhotos = images.contains(where: { $0 == nil })
-            // Keep any preview if a final-quality iCloud request times out.
-            self.setPageTexture(PhotoPageRenderer.image(title: album.title, page: page, images: self.pageImages, loading: false))
+            _ = await self.pageCache.preparedMaterials(at: index)
+            guard !Task.isCancelled, self.readingSessionID == session, self.pageIndex == index else { return }
             self.isLoadingPage = false
+            self.applyPreparedPage(index)
         }
     }
 
-    private func pageThumbnail(for photo: PhotoReference?, slot: Int, page: PhotoPage, title: String, loadID: UUID) async -> UIImage? {
-        guard let photo else { return nil }
-        return await thumbnails.thumbnail(for: photo.id, targetSize: GalleryConfig.albumPhotoTargetSize) { [weak self] image in
-            guard let self, self.pageLoadID == loadID, self.pageImages.indices.contains(slot) else { return }
-            self.pageImages[slot] = image
-            self.setPageTexture(PhotoPageRenderer.image(title: title, page: page, images: self.pageImages, loading: true))
+    private func applyPreparedPage(_ index: Int) {
+        guard isReading, !isTurningPage, index == pageIndex, index > 0 else { return }
+        if let materials = pageCache.materials(at: index) {
+            animationRig?.setPhotos(materials)
+            isLoadingPage = false
         }
-    }
-
-    private func setPageTexture(_ image: UIImage) {
-        guard let cgImage = image.cgImage, let surface = photoSurface else { return }
-        do {
-            let texture = try TextureResource(image: cgImage, options: .init(semantic: .color))
-            var material = UnlitMaterial()
-            material.color = .init(tint: .white, texture: .init(texture))
-            surface.model?.materials = [material]
-        } catch {
-            hasUnavailablePhotos = true
-            print("Could not create photo page texture: \(error)")
-        }
+        hasUnavailablePhotos = pageCache.hasUnavailablePhotos(at: index)
     }
 }
