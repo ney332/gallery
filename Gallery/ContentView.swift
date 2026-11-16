@@ -216,9 +216,9 @@ struct ContentView: View {
         }
         .overlay(alignment: .bottom) {
             if albumController.isReading {
-                bookControls
+                bookStatus
             } else if boxInteractionController.canAccessAlbums {
-                albumPicker
+                albumLibraryStatus
             } else if libraryModel.access == .denied || libraryModel.access == .restricted {
                 Text("gallery.permission.denied")
                     .font(.callout)
@@ -259,71 +259,45 @@ struct ContentView: View {
         albumController.showAlbums(hasAccess ? libraryModel.albums(forBoxSlot: slot) : [], in: box, bounds: bounds)
     }
 
-    private var albumPicker: some View {
-        VStack(spacing: 10) {
-            if libraryModel.isLoading || !albumController.isPrepared {
-                ProgressView("album.loading")
-            } else if libraryModel.access == .denied || libraryModel.access == .restricted {
-                Text("gallery.permission.denied")
-            } else if libraryModel.loadFailed {
-                Text("album.library.failed")
-                Button("album.retry") { Task { await libraryModel.load() } }
-            } else if albumController.albums.isEmpty {
-                Text("album.box.empty")
-            } else {
-                Text("album.select.hint").font(.callout)
-                ScrollView(.horizontal) {
-                    HStack {
-                        ForEach(albumController.albums) { album in
-                            Button {
-                                albumController.select(album.id)
-                            } label: {
-                                Label(album.title, systemImage: albumController.selectedAlbumID == album.id ? "book.fill" : "book.closed")
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                    }
+    @ViewBuilder
+    private var albumLibraryStatus: some View {
+        if libraryModel.isLoading || !albumController.isPrepared
+            || libraryModel.access == .denied || libraryModel.access == .restricted
+            || libraryModel.loadFailed || albumController.albums.isEmpty {
+            VStack(spacing: 10) {
+                if libraryModel.isLoading || !albumController.isPrepared {
+                    ProgressView("album.loading")
+                } else if libraryModel.access == .denied || libraryModel.access == .restricted {
+                    Text("gallery.permission.denied")
+                } else if libraryModel.loadFailed {
+                    Text("album.library.failed")
+                    Button("album.retry") { Task { await libraryModel.load() } }
+                } else {
+                    Text("album.box.empty")
                 }
             }
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 24)
+            .padding(.bottom, 28)
         }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal, 24)
-        .padding(.bottom, 28)
     }
 
-    private var bookControls: some View {
-        VStack(spacing: 8) {
-            if albumController.isLoadingPage { ProgressView("album.loading") }
-            if albumController.hasUnavailablePhotos {
-                Button("album.retry") { albumController.retryPage() }
-                    .disabled(albumController.isTurningPage)
+    @ViewBuilder
+    private var bookStatus: some View {
+        if albumController.isLoadingPage || albumController.hasUnavailablePhotos {
+            VStack(spacing: 8) {
+                if albumController.isLoadingPage { ProgressView("album.loading") }
+                if albumController.hasUnavailablePhotos {
+                    Button("album.retry") { albumController.retryPage() }
+                        .disabled(albumController.isTurningPage)
+                }
             }
-            HStack(spacing: 24) {
-                Button { albumController.turnPage(by: -1) } label: {
-                    Label("album.previous", systemImage: "chevron.left")
-                        .frame(minWidth: 44, minHeight: 44)
-                }
-                .disabled(!albumController.canGoBack)
-                if albumController.pageIndex == 0 {
-                    Text("album.cover")
-                } else {
-                    Text(String(format: String(localized: "album.photo.range"),
-                                (albumController.pageIndex - 1) * 2 + 1,
-                                min(albumController.pageIndex * 2, albumController.activeAlbum?.photos.count ?? 0),
-                                albumController.activeAlbum?.photos.count ?? 0))
-                }
-                Button { albumController.turnPage(by: 1) } label: {
-                    Label("album.next", systemImage: "chevron.right")
-                        .frame(minWidth: 44, minHeight: 44)
-                }
-                .disabled(!albumController.canGoForward)
-            }
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 24)
+            .padding(.bottom, 28)
         }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal, 24)
-        .padding(.bottom, 28)
     }
 
     private func shelfAncestor(from entity: Entity) -> Entity? {
