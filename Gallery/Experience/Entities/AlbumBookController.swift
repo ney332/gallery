@@ -35,6 +35,8 @@ final class AlbumBookController {
     @ObservationIgnored private var tray: Entity?
     @ObservationIgnored private var albumEntities: [String: Entity] = [:]
     @ObservationIgnored private var albumHomes: [String: SIMD3<Float>] = [:]
+    @ObservationIgnored private var albumCollisions: [String: CollisionComponent] = [:]
+    @ObservationIgnored private var interactionEnabled = false
     @ObservationIgnored private var book: Entity?
     @ObservationIgnored private var animationRig: AlbumAnimationController?
     @ObservationIgnored private var turnTask: Task<Void, Never>?
@@ -99,10 +101,11 @@ final class AlbumBookController {
                 bounds.center.y + (Float(albums.count - 1) / 2 - Float(index)) * spacing,
                 bounds.min.z + bounds.extents.z * 0.08 + sample.extents.x * scale / 2
             ]
-            entity.components.set(CollisionComponent(shapes: [
+            // Geometry is ready inside the closed box; hit targets are enabled
+            // only after both flaps finish opening.
+            albumCollisions[album.id] = CollisionComponent(shapes: [
                 .generateBox(size: sample.extents)
-            ]))
-            entity.components.set(InputTargetComponent())
+            ])
             tray.addChild(entity)
             albumEntities[album.id] = entity
             albumHomes[album.id] = entity.position
@@ -113,7 +116,22 @@ final class AlbumBookController {
         }
     }
 
+    func setInteractionEnabled(_ enabled: Bool) {
+        interactionEnabled = enabled
+        for (id, entity) in albumEntities {
+            if enabled, let collision = albumCollisions[id] {
+                entity.components.set(collision)
+                entity.components.set(InputTargetComponent())
+            } else {
+                entity.components.remove(CollisionComponent.self)
+                entity.components.remove(InputTargetComponent.self)
+            }
+        }
+        updateHighlight()
+    }
+
     func albumID(containing entity: Entity) -> String? {
+        guard interactionEnabled else { return nil }
         var current: Entity? = entity
         while let candidate = current {
             if let match = albumEntities.first(where: { $0.value === candidate }) { return match.key }
@@ -123,7 +141,7 @@ final class AlbumBookController {
     }
 
     func select(_ id: String) {
-        guard !isReading, let album = albums.first(where: { $0.id == id }) else { return }
+        guard interactionEnabled, !isReading, let album = albums.first(where: { $0.id == id }) else { return }
         if selectedAlbumID == id {
             open(album)
         } else {
@@ -345,7 +363,9 @@ final class AlbumBookController {
         hasUnavailablePhotos = false
         if let content = pendingContent, let box, let bounds = boxBounds {
             pendingContent = nil
+            let wasInteractive = interactionEnabled
             showAlbums(content, in: box, bounds: bounds)
+            setInteractionEnabled(wasInteractive)
         }
     }
 
@@ -360,12 +380,14 @@ final class AlbumBookController {
         selectedAlbumID = nil
         albumEntities.removeAll()
         albumHomes.removeAll()
+        albumCollisions.removeAll()
+        interactionEnabled = false
     }
 
     private func updateHighlight() {
         for (id, entity) in albumEntities {
             guard let home = albumHomes[id] else { continue }
-            entity.position = home + SIMD3<Float>(0, 0, id == selectedAlbumID ? 0.045 : 0)
+            entity.position = home + SIMD3<Float>(0, 0, interactionEnabled && id == selectedAlbumID ? 0.045 : 0)
         }
     }
 

@@ -73,6 +73,7 @@ struct ContentView: View {
                             }
                         } else if orbitController.isShelfFocusReady {
                             boxInteractionController.present(box, viewport: viewportSize)
+                            refreshAlbums()
                         }
                         return
                     }
@@ -234,6 +235,7 @@ struct ContentView: View {
             }
         }
         .task { await libraryModel.load() }
+        .onChange(of: boxInteractionController.phase) { _, _ in refreshAlbums() }
         .onChange(of: boxInteractionController.canAccessAlbums) { _, _ in refreshAlbums() }
         .onChange(of: albumController.isPrepared) { _, _ in refreshAlbums() }
         .onChange(of: libraryModel.years) { _, _ in refreshAlbums() }
@@ -265,7 +267,8 @@ struct ContentView: View {
     }
 
     private func refreshAlbums() {
-        guard boxInteractionController.canAccessAlbums,
+        guard boxInteractionController.isActive,
+              boxInteractionController.phase != .returning,
               let box = boxInteractionController.selectedBox,
               let bounds = boxInteractionController.selectedBoxBounds,
               let slot = BoxInteractionController.boxNames.firstIndex(of: box.name) else {
@@ -274,6 +277,7 @@ struct ContentView: View {
         }
         let hasAccess = libraryModel.access == .authorized || libraryModel.access == .limited
         albumController.showAlbums(hasAccess ? libraryModel.albums(forBoxSlot: slot) : [], in: box, bounds: bounds)
+        albumController.setInteractionEnabled(boxInteractionController.canAccessAlbums && hasAccess)
     }
 
     @ViewBuilder
