@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var albumController = AlbumBookController()
     @State private var windowInteractionController = WindowInteractionController()
     @GestureState private var isPressingWindow = false
+    @GestureState private var isPageGestureActive = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var isDragging = false
 
@@ -136,7 +137,14 @@ struct ContentView: View {
         )
         .simultaneousGesture(
             DragGesture(minimumDistance: 1, coordinateSpace: .local)
+                .updating($isPageGestureActive) { _, state, _ in
+                    state = albumController.isReading
+                }
                 .onChanged { value in
+                    if albumController.isReading {
+                        albumController.updatePageDrag(translation: value.translation)
+                        return
+                    }
                     guard !boxInteractionController.isActive,
                           !isPressingWindow, !windowInteractionController.isDragging else { return }
                     if !isDragging {
@@ -147,11 +155,7 @@ struct ContentView: View {
                 }
                 .onEnded { value in
                     if albumController.isReading {
-                        let movement = value.translation
-                        if abs(movement.width) > GalleryConfig.albumSwipeThreshold,
-                           abs(movement.width) > abs(movement.height) {
-                            albumController.turnPage(by: movement.width < 0 ? 1 : -1)
-                        }
+                        albumController.endPageDrag(predictedTranslation: value.predictedEndTranslation)
                         return
                     }
                     isDragging = false
@@ -173,6 +177,7 @@ struct ContentView: View {
                     Button { albumController.closeBook() } label: {
                         Label("album.back.box", systemImage: "arrow.left")
                     }
+                    .disabled(albumController.phase == .returning)
                     Text(albumController.activeAlbum?.title ?? "")
                         .font(.headline)
                 }
@@ -237,8 +242,20 @@ struct ContentView: View {
         .onChange(of: isPressingWindow) { _, isPressed in
             if !isPressed { windowInteractionController.endDrag() }
         }
+        .onChange(of: isPageGestureActive) { _, active in
+            if !active {
+                // Give onEnded a chance to settle a completed gesture first.
+                Task { @MainActor in
+                    await Task.yield()
+                    if !isPageGestureActive { albumController.cancelPageDrag() }
+                }
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { windowInteractionController.endDrag() }
+            if phase != .active {
+                windowInteractionController.endDrag()
+                albumController.cancelPageDrag()
+            }
         }
         .onDisappear {
             windowInteractionController.endDrag()

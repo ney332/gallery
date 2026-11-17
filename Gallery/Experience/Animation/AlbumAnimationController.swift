@@ -59,19 +59,19 @@ final class AlbumAnimationController {
         paperRoot.isEnabled = open
     }
 
-    func animateCover(open: Bool) async {
+    func animateCover(open: Bool, duration: TimeInterval = GalleryConfig.albumCoverOpenDuration) async {
         paperRoot.isEnabled = false
         if let skeleton, coverJoint != nil {
             let animation = FromToByAnimation<JointTransforms>(
                 jointNames: skeleton.jointNames,
                 from: JointTransforms(skeleton.jointTransforms),
                 to: JointTransforms(coverPose(open: open)),
-                duration: GalleryConfig.albumCoverOpenDuration,
+                duration: duration,
                 timing: .easeInOut, bindTarget: .jointTransforms
             )
             if let resource = try? AnimationResource.generate(with: animation) {
                 let playback = skeleton.playAnimation(resource)
-                await waitForPlayback(playback, on: skeleton, duration: GalleryConfig.albumCoverOpenDuration)
+                await waitForPlayback(playback, on: skeleton, duration: duration)
             }
         }
         guard !Task.isCancelled else { return }
@@ -88,19 +88,47 @@ final class AlbumAnimationController {
         turningLeaf?.isEnabled = true
     }
 
-    func animateTurn() async {
+    func setTurnProgress(_ progress: Float) {
+        let amount = min(max(progress, 0), 1)
+        let angle = turnDirection > 0 ? -openAngle * amount : -openAngle * (1 - amount)
+        turningLeaf?.orientation = simd_quatf(angle: angle, axis: [0, 1, 0])
+    }
+
+    func setCoverProgress(_ amount: Float) {
+        var pose = restJoints
+        if let index = coverJoint, pose.indices.contains(index) {
+            pose[index].rotation *= simd_quatf(angle: -openAngle * min(max(amount, 0), 1), axis: [1, 0, 0])
+            skeleton?.jointTransforms = pose
+        }
+        paperRoot.isEnabled = amount >= 0.999
+    }
+
+    func finishTurn(commit: Bool, progress: Float, original: AlbumPageMaterials?) async {
         guard let turningLeaf else { return }
+        let end: Float = commit ? 1 : 0
+        let amount = turnDirection > 0 ? end : 1 - end
         var destination = turningLeaf.transform
-        destination.rotation = simd_quatf(angle: turnDirection > 0 ? -openAngle : 0, axis: [0, 1, 0])
-        let playback = turningLeaf.move(to: destination, relativeTo: paperRoot,
-                                        duration: GalleryConfig.albumPageTurnDuration, timingFunction: .easeInOut)
-        await waitForPlayback(playback, on: turningLeaf, duration: GalleryConfig.albumPageTurnDuration)
+        destination.rotation = simd_quatf(angle: -openAngle * amount, axis: [0, 1, 0])
+        let duration = max(0.12, GalleryConfig.albumPageTurnDuration * Double(abs(end - progress)))
+        await move(turningLeaf, to: destination, relativeTo: paperRoot, duration: duration)
         guard !Task.isCancelled else { return }
-        turningLeaf.stopAllAnimations(recursive: false)
-        turningLeaf.transform = destination
-        turningLeaf.isEnabled = false
+        resetTurn(materials: commit ? nil : original)
+    }
+
+    func resetTurn(materials: AlbumPageMaterials?) {
+        turningLeaf?.stopAllAnimations(recursive: false)
+        turningLeaf?.isEnabled = false
         turnDirection = 0
-        applyMaterials()
+        if let materials { setPhotos(materials) } else { applyMaterials() }
+    }
+
+    func move(_ entity: Entity, to destination: Transform, relativeTo parent: Entity, duration: TimeInterval) async {
+        let playback = entity.move(to: destination, relativeTo: parent,
+                                   duration: duration, timingFunction: .easeInOut)
+        await waitForPlayback(playback, on: entity, duration: duration)
+        guard !Task.isCancelled else { return }
+        entity.stopAllAnimations(recursive: false)
+        entity.transform = destination
     }
 
     /// A wall-clock sleep could hide the sheet before RealityKit finished

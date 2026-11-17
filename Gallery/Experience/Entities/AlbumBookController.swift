@@ -15,10 +15,19 @@ final class AlbumBookController {
     private(set) var hasUnavailablePhotos = false
     var isReading: Bool { activeAlbum != nil }
     var pageCount: Int { pages.count }
-    private(set) var isTurningPage = false
+    enum Phase { case idle, entering, reading, preparing, dragging, settling, returning }
+    private(set) var phase: Phase = .idle
+    var isTurningPage: Bool { phase == .preparing || phase == .dragging || phase == .settling }
     var canGoBack: Bool { !isTurningPage && pageIndex > 0 }
     var canGoForward: Bool { !isTurningPage && pageIndex < pages.count }
 
+    @ObservationIgnored private var transitionTask: Task<Void, Never>?
+    @ObservationIgnored private var turnID = UUID()
+    @ObservationIgnored private var turnTarget = 0
+    @ObservationIgnored private var turnDirection = 0
+    @ObservationIgnored private var dragProgress: Float = 0
+    @ObservationIgnored private var outgoingMaterials: AlbumPageMaterials?
+    @ObservationIgnored private weak var sourceAlbum: Entity?
     @ObservationIgnored private var prototype: Entity?
     @ObservationIgnored private weak var camera: Entity?
     @ObservationIgnored private weak var box: Entity?
@@ -127,58 +136,146 @@ final class AlbumBookController {
     func updateViewport(_ size: CGSize) {
         guard viewport != size else { return }
         viewport = size
-        frameBook()
+        if phase == .reading { frameBook() }
+        else if phase == .dragging || phase == .preparing { cancelPageDrag() }
+    }
+
+    func updatePageDrag(translation: CGSize) {
+        if phase == .reading {
+            guard abs(translation.width) >= 8,
+                  abs(translation.width) > abs(translation.height) else { return }
+            beginTurn(by: translation.width < 0 ? 1 : -1)
+        }
+        guard phase == .preparing || phase == .dragging else { return }
+        let distance = max(viewport.width * GalleryConfig.albumDragWidthFraction, 100)
+        dragProgress = min(max(Float(-translation.width * CGFloat(turnDirection) / distance), 0), 1)
+        if phase == .dragging { updateTurnPose() }
+    }
+
+    func endPageDrag(predictedTranslation: CGSize) {
+        if phase == .preparing {
+            // A download must never trigger a stale gesture after finger-up.
+            cancelPageDrag()
+            return
+        }
+        guard phase == .dragging else { return }
+        let distance = max(viewport.width * GalleryConfig.albumDragWidthFraction, 100)
+        let predicted = Float(-predictedTranslation.width * CGFloat(turnDirection) / distance)
+        let commit = dragProgress >= GalleryConfig.albumTurnCommitProgress
+            || (dragProgress > 0.08 && predicted >= 0.65)
+        settleTurn(commit: commit)
+    }
+
+    func cancelPageDrag() {
+        if phase == .dragging {
+            settleTurn(commit: false)
+        } else if phase == .preparing {
+            turnID = UUID()
+            turnTask?.cancel()
+            turnTask = nil
+            phase = .reading
+            outgoingMaterials = nil
+            isLoadingPage = false
+            pageCache.keepWindow(around: pageIndex)
+            loadPage()
+        }
     }
 
     func turnPage(by delta: Int) {
-        guard isReading, !isTurningPage, delta != 0, let rig = animationRig else { return }
+        beginTurn(by: delta, automaticallyComplete: true)
+    }
+
+    private func beginTurn(by delta: Int, automaticallyComplete: Bool = false) {
+        guard phase == .reading, delta != 0, let rig = animationRig else { return }
         let direction = delta > 0 ? 1 : -1
         let next = min(max(pageIndex + direction, 0), pages.count)
         guard next != pageIndex else { return }
-        let previous = pageIndex
-        let session = readingSessionID
+        // Never turn an outgoing spread that is still being prepared.
+        guard pageIndex == 0 || pageCache.materials(at: pageIndex) != nil else { return }
         failedTurnTarget = nil
         pageTask?.cancel()
-        isTurningPage = true
-        pageCache.keepWindow(around: next)
+        turnTarget = next
+        turnDirection = direction
+        dragProgress = 0
+        outgoingMaterials = pageCache.materials(at: pageIndex)
+        turnID = UUID()
+        let token = turnID
+        let session = readingSessionID
+        phase = .preparing
+        pageCache.keepWindow(around: pageIndex)
         isLoadingPage = next > 0 && pageCache.materials(at: next) == nil
-        turnTask = Task { [weak self] in
-            guard let self else { return }
-            // Keep the current photos, geometry and camera framing visible while
-            // waiting for the target. A ready cached spread needs no PhotoKit wait.
-            let materials = next > 0 ? await self.pageCache.preparedMaterials(at: next) : nil
-            guard !Task.isCancelled, self.readingSessionID == session else { return }
-            self.isLoadingPage = false
+
+        func prepare(_ materials: AlbumPageMaterials?) {
+            isLoadingPage = false
             if next > 0 && materials == nil {
-                self.failedTurnTarget = next
-                self.hasUnavailablePhotos = true
-                self.isTurningPage = false
-                self.turnTask = nil
+                failedTurnTarget = next
+                hasUnavailablePhotos = true
+                phase = .reading
                 return
             }
-            self.pageCache.setAnimationActive(true)
-            if previous > 0 && next > 0 { rig.beginTurn(by: direction) }
+            pageCache.setAnimationActive(true)
+            if pageIndex > 0 && next > 0 { rig.beginTurn(by: direction) }
             if let materials { rig.setPhotos(materials) }
-            if previous == 0 || next == 0 {
-                // Framing changes only when opening/closing the cover.
-                self.frameBook(open: next > 0, animated: true)
-                await rig.animateCover(open: next > 0)
-            } else {
-                await rig.animateTurn()
+            phase = .dragging
+            updateTurnPose()
+            if automaticallyComplete { settleTurn(commit: true) }
+        }
+
+        if next == 0 || pageCache.materials(at: next) != nil {
+            prepare(pageCache.materials(at: next))
+        } else {
+            turnTask = Task { [weak self] in
+                guard let self else { return }
+                let materials = await self.pageCache.preparedMaterials(at: next)
+                guard !Task.isCancelled, self.readingSessionID == session,
+                      self.turnID == token, self.phase == .preparing else { return }
+                prepare(materials)
             }
-            guard !Task.isCancelled, self.readingSessionID == session else { return }
-            self.pageIndex = next
+        }
+    }
+
+    private func updateTurnPose() {
+        if pageIndex == 0 || turnTarget == 0 {
+            let amount = pageIndex == 0 ? dragProgress : 1 - dragProgress
+            animationRig?.setCoverProgress(amount)
+            frameCoverProgress(amount)
+        } else {
+            animationRig?.setTurnProgress(dragProgress)
+        }
+    }
+
+    private func settleTurn(commit: Bool) {
+        guard phase == .dragging, let rig = animationRig else { return }
+        phase = .settling
+        let session = readingSessionID
+        let token = turnID
+        let target = commit ? turnTarget : pageIndex
+        let progress = dragProgress
+        let original = outgoingMaterials
+        turnTask = Task { [weak self] in
+            guard let self else { return }
+            if self.pageIndex == 0 || self.turnTarget == 0 {
+                self.frameBook(open: target > 0, animated: true)
+                await rig.animateCover(open: target > 0)
+                if !commit, let original { rig.setPhotos(original) }
+            } else {
+                await rig.finishTurn(commit: commit, progress: progress, original: original)
+            }
+            guard !Task.isCancelled, self.readingSessionID == session, self.turnID == token else { return }
+            self.pageIndex = target
             self.rememberPage()
-            self.isTurningPage = false
+            self.phase = .reading
             self.turnTask = nil
+            self.outgoingMaterials = nil
             self.pageCache.setAnimationActive(false)
-            self.applyPreparedPage(next)
-            self.pageCache.keepWindow(around: next)
+            self.pageCache.keepWindow(around: target)
+            self.applyPreparedPage(target)
+            self.frameBook()
         }
     }
 
     func retryPage() {
-        guard isReading, !isTurningPage else { return }
+        guard phase == .reading else { return }
         if let target = failedTurnTarget {
             pageCache.retry(target)
             turnPage(by: target - pageIndex)
@@ -190,10 +287,45 @@ final class AlbumBookController {
     }
 
     func closeBook() {
+        guard isReading, phase != .returning, let book, let camera, let rig = animationRig else { return }
+        rememberPage()
+        transitionTask?.cancel()
+        turnTask?.cancel()
+        pageTask?.cancel()
+        readingSessionID = UUID()
+        let session = readingSessionID
+        turnID = UUID()
+        phase = .returning
+        book.stopAllAnimations(recursive: true)
+        rig.resetTurn(materials: pageCache.materials(at: pageIndex))
+        pageCache.clear()
+        isLoadingPage = false
+        hasUnavailablePhotos = false
+        transitionTask = Task { [weak self] in
+            guard let self else { return }
+            await rig.animateCover(open: false)
+            guard !Task.isCancelled, self.readingSessionID == session else { return }
+            self.box?.isEnabled = self.boxWasEnabled
+            if let source = self.sourceAlbum {
+                let destination = Transform(matrix: source.transformMatrix(relativeTo: camera))
+                await rig.move(book, to: destination, relativeTo: camera,
+                               duration: GalleryConfig.albumTravelDuration)
+            }
+            guard !Task.isCancelled, self.readingSessionID == session else { return }
+            self.transitionTask = nil
+            self.removeBook()
+        }
+    }
+
+    private func removeBook() {
         rememberPage()
         turnTask?.cancel()
         turnTask = nil
-        isTurningPage = false
+        transitionTask?.cancel()
+        transitionTask = nil
+        turnID = UUID()
+        phase = .idle
+        outgoingMaterials = nil
         failedTurnTarget = nil
         book?.stopAllAnimations(recursive: true)
         pageTask?.cancel()
@@ -201,6 +333,8 @@ final class AlbumBookController {
         pageCache.clear()
         pageTask = nil
         if isReading { box?.isEnabled = boxWasEnabled }
+        sourceAlbum?.isEnabled = true
+        sourceAlbum = nil
         book?.removeFromParent()
         book = nil
         animationRig = nil
@@ -217,7 +351,7 @@ final class AlbumBookController {
 
     func clearAlbums() {
         pendingContent = nil
-        closeBook()
+        removeBook()
         tray?.removeFromParent()
         tray = nil
         box = nil
@@ -236,25 +370,51 @@ final class AlbumBookController {
     }
 
     private func open(_ album: AlbumContent) {
-        guard let camera, let box, let prototype else { return }
+        guard let camera, let box, let prototype, let source = albumEntities[album.id] else { return }
         activeAlbum = album
+        phase = .entering
         readingSessionID = UUID()
+        let session = readingSessionID
         pages = PhotoPage.paginate(album.photos)
         pageCache.configure(title: album.title, pages: pages)
         pageCache.onUpdate = { [weak self] index in self?.applyPreparedPage(index) }
-        pageIndex = min(rememberedPages[album.id, default: 0], pages.count)
+        pageIndex = min(rememberedPages[album.id, default: 1], pages.count)
+        pageCache.keepWindow(around: pageIndex)
         boxWasEnabled = box.isEnabled
-        box.isEnabled = false
+        sourceAlbum = source
         let rig = AlbumAnimationController(prototype: prototype)
         animationRig = rig
         let book = Entity()
         book.name = "PhotoAlbum"
         camera.addChild(book)
         book.addChild(rig.root)
+        book.transform = Transform(matrix: source.transformMatrix(relativeTo: camera))
+        source.isEnabled = false
         self.book = book
-        rig.setOpen(pageIndex > 0)
-        frameBook()
-        loadPage()
+        rig.setOpen(false)
+        transitionTask = Task { [weak self] in
+            guard let self, let destination = self.bookPose(open: false) else { return }
+            await rig.move(book, to: destination, relativeTo: camera,
+                           duration: GalleryConfig.albumTravelDuration)
+            guard !Task.isCancelled, self.readingSessionID == session else { return }
+            self.box?.isEnabled = false
+            if self.pageIndex > 0 {
+                self.isLoadingPage = self.pageCache.materials(at: self.pageIndex) == nil
+                let materials = await self.pageCache.preparedMaterials(at: self.pageIndex)
+                guard !Task.isCancelled, self.readingSessionID == session else { return }
+                if let materials { rig.setPhotos(materials) }
+                self.isLoadingPage = false
+                self.pageCache.setAnimationActive(true)
+                self.frameBook(open: true, animated: true)
+                await rig.animateCover(open: true)
+                guard !Task.isCancelled, self.readingSessionID == session else { return }
+            }
+            self.phase = .reading
+            self.transitionTask = nil
+            self.pageCache.setAnimationActive(false)
+            self.frameBook()
+            self.loadPage()
+        }
     }
 
     private func makeCover() -> Entity {
@@ -262,25 +422,37 @@ final class AlbumBookController {
         return AlbumAnimationController.normalizedModel(from: prototype)
     }
 
-    private func frameBook(open: Bool? = nil, animated: Bool = false) {
-        guard let book, let camera, let rig = animationRig else { return }
+    private func bookPose(open: Bool) -> Transform? {
+        guard let camera, let rig = animationRig else { return nil }
         let fov = camera.components[PerspectiveCameraComponent.self]?.fieldOfViewInDegrees ?? 50.2
         let distance = GalleryConfig.albumViewingDistance
         let height = 2 * distance * tan(fov * .pi / 360)
         let aspect = Float(viewport.width / max(viewport.height, 1))
-        let isOpen = open ?? (pageIndex > 0)
+        let isOpen = open
         let width = isOpen ? rig.readingWidth : rig.closedBounds.extents.x
         let scale = min(height * max(aspect, 0.25) * 0.82 / max(width, 0.001),
                         height * 0.65 / GalleryConfig.albumPageHeight)
         let center = isOpen ? rig.readingCenter : SIMD3<Float>.zero
-        let destination = Transform(scale: SIMD3(repeating: scale), rotation: simd_quatf(angle: 0, axis: [0, 1, 0]),
+        return Transform(scale: SIMD3(repeating: scale), rotation: simd_quatf(angle: 0, axis: [0, 1, 0]),
                                     translation: SIMD3<Float>(0, -height * 0.025, -distance) - center * scale)
+    }
+
+    private func frameBook(open: Bool? = nil, animated: Bool = false) {
+        guard let book, let camera, let destination = bookPose(open: open ?? (pageIndex > 0)) else { return }
         if animated {
             book.move(to: destination, relativeTo: camera,
                       duration: GalleryConfig.albumCoverOpenDuration, timingFunction: .easeInOut)
         } else {
             book.transform = destination
         }
+    }
+
+    private func frameCoverProgress(_ amount: Float) {
+        guard let book, let closed = bookPose(open: false), let opened = bookPose(open: true) else { return }
+        var pose = closed
+        pose.scale = closed.scale + (opened.scale - closed.scale) * amount
+        pose.translation = closed.translation + (opened.translation - closed.translation) * amount
+        book.transform = pose
     }
 
     private func rememberPage() {
@@ -312,7 +484,7 @@ final class AlbumBookController {
     }
 
     private func applyPreparedPage(_ index: Int) {
-        guard isReading, !isTurningPage, index == pageIndex, index > 0 else { return }
+        guard phase == .reading, index == pageIndex, index > 0 else { return }
         if let materials = pageCache.materials(at: index) {
             animationRig?.setPhotos(materials)
             isLoadingPage = false

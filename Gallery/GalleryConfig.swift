@@ -6,7 +6,9 @@ enum GalleryConfig {
     static let albumPageTurnDuration: TimeInterval = 0.65
     static let albumCoverOpenDuration: TimeInterval = 0.8
     static let albumViewingDistance: Float = 0.55
-    static let albumSwipeThreshold: CGFloat = 55
+    static let albumTravelDuration: TimeInterval = 0.75
+    static let albumDragWidthFraction: CGFloat = 0.55
+    static let albumTurnCommitProgress: Float = 0.4
     static let albumPageTextureWidth: CGFloat = 2048
     static let albumPhotoTargetSize = CGSize(width: 1200, height: 1600)
     static let minimumSupportedOS = "26.0"
