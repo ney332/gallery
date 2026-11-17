@@ -14,6 +14,7 @@ final class AlbumAnimationController {
     private var skeleton: ModelEntity?
     private var restJoints: [Transform] = []
     private var coverJoint: Int?
+    private var leftPageHinge: Entity?
     private var leftSurface: ModelEntity?
     private var rightSurface: ModelEntity?
     private var turningFront: ModelEntity?
@@ -22,6 +23,8 @@ final class AlbumAnimationController {
     private var currentLeft = UnlitMaterial(color: .white)
     private var currentRight = UnlitMaterial(color: .white)
     private var turnDirection = 0
+    private var showsLeftPage = false
+    private var outgoingShowsLeftPage = false
     // A tiny margin avoids quaternion interpolation choosing the downward
     // half-turn when floating-point rounding makes cos(pi / 2) negative.
     private let openAngle: Float = .pi - 0.001
@@ -51,16 +54,20 @@ final class AlbumAnimationController {
         }
         root.addChild(paperRoot)
         configurePages()
-        paperRoot.isEnabled = false
+        setOpen(false)
     }
 
     func setOpen(_ open: Bool) {
         if let skeleton { skeleton.jointTransforms = coverPose(open: open) }
+        leftPageHinge?.orientation = simd_quatf(angle: open ? -openAngle : 0, axis: [0, 1, 0])
         paperRoot.isEnabled = open
     }
 
     func animateCover(open: Bool, duration: TimeInterval = GalleryConfig.albumCoverOpenDuration) async {
-        paperRoot.isEnabled = false
+        // Both photo textures are assigned before this starts. The left leaf
+        // unfolds with the cover instead of appearing flat at the final frame.
+        paperRoot.isEnabled = true
+        async let paperAnimation: Void = animatePaperCover(open: open, duration: duration)
         if let skeleton, coverJoint != nil {
             let animation = FromToByAnimation<JointTransforms>(
                 jointNames: skeleton.jointNames,
@@ -74,17 +81,26 @@ final class AlbumAnimationController {
                 await waitForPlayback(playback, on: skeleton, duration: duration)
             }
         }
+        await paperAnimation
         guard !Task.isCancelled else { return }
         skeleton?.stopAllAnimations(recursive: false)
         setOpen(open)
     }
 
+    private func animatePaperCover(open: Bool, duration: TimeInterval) async {
+        guard let leftPageHinge else { return }
+        var destination = leftPageHinge.transform
+        destination.rotation = simd_quatf(angle: open ? -openAngle : 0, axis: [0, 1, 0])
+        await move(leftPageHinge, to: destination, relativeTo: paperRoot, duration: duration)
+    }
+
     /// Snapshot the outgoing face before asynchronous target photos arrive.
     func beginTurn(by direction: Int) {
+        outgoingShowsLeftPage = showsLeftPage
         turnDirection = direction > 0 ? 1 : -1
         turningFront?.model?.materials = [currentRight]
         turningBack?.model?.materials = [currentLeft]
-        turningLeaf?.orientation = simd_quatf(angle: direction > 0 ? 0 : -openAngle, axis: [0, 1, 0])
+        setTurnProgress(0)
         turningLeaf?.isEnabled = true
     }
 
@@ -100,7 +116,8 @@ final class AlbumAnimationController {
             pose[index].rotation *= simd_quatf(angle: -openAngle * min(max(amount, 0), 1), axis: [1, 0, 0])
             skeleton?.jointTransforms = pose
         }
-        paperRoot.isEnabled = amount >= 0.999
+        leftPageHinge?.orientation = simd_quatf(angle: -openAngle * min(max(amount, 0), 1), axis: [0, 1, 0])
+        paperRoot.isEnabled = amount > 0
     }
 
     func finishTurn(commit: Bool, progress: Float, original: AlbumPageMaterials?) async {
@@ -178,10 +195,14 @@ final class AlbumAnimationController {
     func setPhotos(_ materials: AlbumPageMaterials) {
         currentLeft = materials.left
         currentRight = materials.right
+        showsLeftPage = materials.showsLeftPage
         applyMaterials()
     }
 
     private func applyMaterials() {
+        // No synthetic paper or photo lies on the inside cover in spread one.
+        // During a forward turn, the left page arrives with the moving leaf.
+        leftPageHinge?.isEnabled = turnDirection > 0 ? outgoingShowsLeftPage : showsLeftPage
         if turnDirection > 0 {
             rightSurface?.model?.materials = [currentRight]
             turningBack?.model?.materials = [currentLeft]
@@ -217,8 +238,17 @@ final class AlbumAnimationController {
         let width = validBounds?.extents.x ?? GalleryConfig.albumCoverWidth * 0.94
         let height = validBounds?.extents.y ?? GalleryConfig.albumPageHeight * 0.94
         let hingeX = validBounds?.min.x ?? -width / 2
-        // Pages rest just above the opened cover; the small separation avoids z-fighting.
-        let hinge = SIMD3<Float>(hingeX, validBounds?.center.y ?? 0, closedBounds.max.z + 0.003)
+        // Keep the paper beneath the CLOSED front cover. Using max.z + an
+        // offset placed the photo planes outside the album, on top of its cover
+        // as soon as paperRoot became visible during opening.
+        let coverInset = max(closedBounds.extents.z * 0.12, 0.002)
+        let interiorTop = min(validBounds?.max.z ?? closedBounds.center.z,
+                              closedBounds.max.z - coverInset)
+        // Keep the right page at its original interior depth. The turning
+        // leaf and its left-hand resting page share a fixed plane above the
+        // opened cover, without changing depth during the rotation.
+        let leftPaperHeight = max(interiorTop, closedBounds.max.z + 0.003)
+        let hinge = SIMD3<Float>(hingeX, validBounds?.center.y ?? 0, interiorTop)
         readingCenter = [hingeX, hinge.y, 0]
         readingWidth = max(width * 2 + 0.04, GalleryConfig.albumCoverWidth * 2)
 
@@ -226,7 +256,8 @@ final class AlbumAnimationController {
             let pivot = Entity()
             pivot.name = ["LeftPageHinge", "RightPageHinge", "TurningPageHinge"][index]
             paperRoot.addChild(pivot)
-            pivot.position = hinge + SIMD3<Float>(0, 0, index == 2 ? 0.003 : 0)
+            pivot.position = hinge
+            pivot.position.z = index == 1 ? interiorTop : leftPaperHeight + (index == 2 ? 0.0005 : 0)
             if meshes.indices.contains(index) {
                 let page = meshes[index]
                 let oldBounds = page.visualBounds(relativeTo: root)
@@ -248,6 +279,7 @@ final class AlbumAnimationController {
             pivot.addChild(back)
             if index == 0 {
                 pivot.orientation = simd_quatf(angle: -openAngle, axis: [0, 1, 0])
+                leftPageHinge = pivot
                 leftSurface = back
             } else if index == 1 {
                 rightSurface = front

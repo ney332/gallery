@@ -5,6 +5,7 @@ import UIKit
 struct AlbumPageMaterials {
     let left: UnlitMaterial
     let right: UnlitMaterial
+    let showsLeftPage: Bool
 }
 
 /// Keeps only the current spread and its immediate neighbors. Requests may
@@ -61,8 +62,9 @@ final class AlbumPageCache {
         thumbnails.stopAllCaching()
     }
 
-    func keepWindow(around index: Int) {
-        let wanted = Set([index - 1, index, index + 1].filter { $0 > 0 && $0 <= pages.count })
+    func keepWindow(around index: Int, includeNeighbors: Bool = true) {
+        let candidates = includeNeighbors ? [index - 1, index, index + 1] : [index]
+        let wanted = Set(candidates.filter { $0 > 0 && $0 <= pages.count })
         for key in Array(entries.keys) where !wanted.contains(key) {
             entries.removeValue(forKey: key)?.cancel()
         }
@@ -151,7 +153,8 @@ final class AlbumPageCache {
                 let right = PhotoPageRenderer.leafImage(title: self.title, page: entry.page,
                                                        slot: 1, images: entry.images, loading: false)
                 let materials = AlbumPageMaterials(left: try Self.material(for: left),
-                                                   right: try Self.material(for: right))
+                                                   right: try Self.material(for: right),
+                                                   showsLeftPage: !entry.page.startsOnRight)
                 entry.materials = materials
                 entry.resumeWaiters(materials)
             } catch {

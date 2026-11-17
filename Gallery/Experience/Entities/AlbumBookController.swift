@@ -28,6 +28,10 @@ final class AlbumBookController {
     @ObservationIgnored private var dragProgress: Float = 0
     @ObservationIgnored private var outgoingMaterials: AlbumPageMaterials?
     @ObservationIgnored private weak var sourceAlbum: Entity?
+    @ObservationIgnored private var travelModel: Entity?
+    @ObservationIgnored private var extractionPose: Transform?
+    @ObservationIgnored private var approachPose: Transform?
+    @ObservationIgnored private var hasClearedBox = false
     @ObservationIgnored private var prototype: Entity?
     @ObservationIgnored private weak var camera: Entity?
     @ObservationIgnored private weak var box: Entity?
@@ -43,6 +47,7 @@ final class AlbumBookController {
     @ObservationIgnored private var pageTask: Task<Void, Never>?
     @ObservationIgnored private var readingSessionID = UUID()
     @ObservationIgnored private var pageCache = AlbumPageCache()
+    @ObservationIgnored private var cachedAlbum: AlbumContent?
     @ObservationIgnored private var pendingContent: [AlbumContent]?
     @ObservationIgnored private var boxBounds: BoundingBox?
     @ObservationIgnored private var failedTurnTarget: Int?
@@ -81,11 +86,15 @@ final class AlbumBookController {
         self.tray = tray
         let sample = makeCover().visualBounds(relativeTo: nil)
         let thickness = max(sample.extents.z, 0.005)
-        let slotWidth = bounds.extents.y * 0.86 / Float(max(12, albums.count))
-        let scale = min(bounds.extents.x * 0.86 / max(sample.extents.y, 0.001),
-                        bounds.extents.z * 0.84 / max(sample.extents.x, 0.001),
-                        slotWidth * 0.9 / thickness)
-        let spacing = thickness * scale + slotWidth * 0.1
+        let slotWidth = bounds.extents.y * 0.94 / Float(max(12, albums.count))
+        // Preserve the cover's proportions while fitting thickness separately:
+        // twelve slots must not shrink the whole album.
+        let bodyScale = min(bounds.extents.x * 0.94 / max(sample.extents.y, 0.001),
+                            bounds.extents.z * 0.90 / max(sample.extents.x, 0.001))
+        let thicknessScale = min(bodyScale, slotWidth * 0.94 / thickness)
+        let spacing = thickness * thicknessScale + slotWidth * 0.06
+        let albumScale = SIMD3<Float>(bodyScale, bodyScale, thicknessScale)
+        let bottomInset = bounds.extents.z * 0.04
         // Box local +Y points screen-left; +Z is up. Put the spine on top,
         // the long edge along box X and the thickness along box Y.
         let orientation = simd_quatf(simd_float3x3(columns: (
@@ -94,12 +103,12 @@ final class AlbumBookController {
         for (index, album) in albums.enumerated() {
             let entity = makeCover()
             entity.name = "MonthlyAlbum.\(album.id)"
-            entity.scale = SIMD3(repeating: scale)
+            entity.scale = albumScale
             entity.orientation = orientation
             entity.position = [
                 bounds.center.x,
                 bounds.center.y + (Float(albums.count - 1) / 2 - Float(index)) * spacing,
-                bounds.min.z + bounds.extents.z * 0.08 + sample.extents.x * scale / 2
+                bounds.min.z + bottomInset + sample.extents.x * bodyScale / 2
             ]
             // Geometry is ready inside the closed box; hit targets are enabled
             // only after both flaps finish opening.
@@ -317,17 +326,39 @@ final class AlbumBookController {
         book.stopAllAnimations(recursive: true)
         rig.resetTurn(materials: pageCache.materials(at: pageIndex))
         pageCache.clear()
+        cachedAlbum = nil
         isLoadingPage = false
         hasUnavailablePhotos = false
         transitionTask = Task { [weak self] in
             guard let self else { return }
-            await rig.animateCover(open: false)
+            if rig.root.isEnabled { await rig.animateCover(open: false) }
             guard !Task.isCancelled, self.readingSessionID == session else { return }
+            rig.root.isEnabled = false
+            self.travelModel?.isEnabled = true
             self.box?.isEnabled = self.boxWasEnabled
             if let source = self.sourceAlbum {
-                let destination = Transform(matrix: source.transformMatrix(relativeTo: camera))
-                await rig.move(book, to: destination, relativeTo: camera,
-                               duration: GalleryConfig.albumTravelDuration)
+                if self.hasClearedBox {
+                    if let approach = self.approachPose {
+                        await rig.move(book, to: approach, relativeTo: camera, duration: 0.2)
+                        guard !Task.isCancelled, self.readingSessionID == session else { return }
+                    }
+                    if let extraction = self.extractionPose {
+                        await rig.move(book, to: extraction, relativeTo: camera,
+                                       duration: GalleryConfig.albumTravelDuration)
+                        guard !Task.isCancelled, self.readingSessionID == session else { return }
+                    }
+                }
+                // Return to the original parent before inserting. Keeping the
+                // slot's local transform avoids decomposing its nonuniform scale
+                // next to the walls of the box.
+                if let parent = source.parent {
+                    book.setParent(parent, preservingWorldTransform: true)
+                    var aligned = source.transform
+                    aligned.translation = book.position
+                    book.transform = aligned
+                    await rig.move(book, to: source.transform, relativeTo: parent,
+                                   duration: GalleryConfig.albumExtractionDuration)
+                }
             }
             guard !Task.isCancelled, self.readingSessionID == session else { return }
             self.transitionTask = nil
@@ -349,10 +380,15 @@ final class AlbumBookController {
         pageTask?.cancel()
         readingSessionID = UUID()
         pageCache.clear()
+        cachedAlbum = nil
         pageTask = nil
         if isReading { box?.isEnabled = boxWasEnabled }
         sourceAlbum?.isEnabled = true
         sourceAlbum = nil
+        travelModel = nil
+        extractionPose = nil
+        approachPose = nil
+        hasClearedBox = false
         book?.removeFromParent()
         book = nil
         animationRig = nil
@@ -391,35 +427,72 @@ final class AlbumBookController {
         }
     }
 
+    /// Opening starts only the initial spread; neighbors are requested by
+    /// loadPage after the cover animation, using the normal reading cache.
+    private func prepareAlbum(_ album: AlbumContent) {
+        guard cachedAlbum != album else { return }
+        pages = PhotoPage.paginate(album.photos)
+        pageCache.configure(title: album.title, pages: pages)
+        cachedAlbum = album
+        pageCache.onUpdate = { [weak self] index in self?.applyPreparedPage(index) }
+        let initialPage = min(rememberedPages[album.id, default: 1], pages.count)
+        pageCache.keepWindow(around: max(1, initialPage), includeNeighbors: false)
+    }
+
     private func open(_ album: AlbumContent) {
         guard let camera, let box, let prototype, let source = albumEntities[album.id] else { return }
         activeAlbum = album
         phase = .entering
         readingSessionID = UUID()
         let session = readingSessionID
-        pages = PhotoPage.paginate(album.photos)
-        pageCache.configure(title: album.title, pages: pages)
-        pageCache.onUpdate = { [weak self] index in self?.applyPreparedPage(index) }
+        prepareAlbum(album)
         pageIndex = min(rememberedPages[album.id, default: 1], pages.count)
-        pageCache.keepWindow(around: pageIndex)
         boxWasEnabled = box.isEnabled
         sourceAlbum = source
         let rig = AlbumAnimationController(prototype: prototype)
         animationRig = rig
         let book = Entity()
         book.name = "PhotoAlbum"
-        camera.addChild(book)
+        // Start in exactly the same parent/pose as the visible slot model.
+        // Do not convert a thin, nonuniformly scaled album to camera space
+        // while it is still inside the box.
+        guard let slotParent = source.parent else { return }
+        slotParent.addChild(book)
+        book.transform = source.transform
+        let travel = makeCover()
+        book.addChild(travel)
+        travelModel = travel
         book.addChild(rig.root)
-        book.transform = Transform(matrix: source.transformMatrix(relativeTo: camera))
+        rig.root.isEnabled = false
         source.isEnabled = false
         self.book = book
         rig.setOpen(false)
+        hasClearedBox = false
+        configureExtractionPath(source: Transform(matrix: book.transformMatrix(relativeTo: camera)), rig: rig)
         transitionTask = Task { [weak self] in
             guard let self, let destination = self.bookPose(open: false) else { return }
-            await rig.move(book, to: destination, relativeTo: camera,
+            if let extraction = self.extractionPose {
+                // Keep the album upright and at its slot scale until its entire
+                // body is above the rim; only then rotate towards the reader.
+                var localExtraction = book.transform
+                let cameraToSlot = camera.transformMatrix(relativeTo: slotParent)
+                let point = cameraToSlot * SIMD4<Float>(extraction.translation.x, extraction.translation.y,
+                                                       extraction.translation.z, 1)
+                localExtraction.translation = SIMD3<Float>(point.x, point.y, point.z)
+                await rig.move(book, to: localExtraction, relativeTo: slotParent,
+                               duration: GalleryConfig.albumExtractionDuration)
+                guard !Task.isCancelled, self.readingSessionID == session else { return }
+                self.hasClearedBox = true
+                book.setParent(camera, preservingWorldTransform: true)
+            }
+            await rig.move(book, to: self.approachPose ?? destination, relativeTo: camera,
                            duration: GalleryConfig.albumTravelDuration)
             guard !Task.isCancelled, self.readingSessionID == session else { return }
-            self.box?.isEnabled = false
+            await rig.move(book, to: destination, relativeTo: camera, duration: 0.2)
+            guard !Task.isCancelled, self.readingSessionID == session else { return }
+            // Keep the box and remaining albums visible behind the book.
+            travel.isEnabled = false
+            rig.root.isEnabled = true
             if self.pageIndex > 0 {
                 self.isLoadingPage = self.pageCache.materials(at: self.pageIndex) == nil
                 let materials = await self.pageCache.preparedMaterials(at: self.pageIndex)
@@ -437,6 +510,30 @@ final class AlbumBookController {
             self.frameBook()
             self.loadPage()
         }
+    }
+
+    private func configureExtractionPath(source: Transform, rig: AlbumAnimationController) {
+        guard let box, let camera, let bounds = boxBounds,
+              let destination = bookPose(open: false) else { return }
+        // The opening is box-local +Z (Blender axes), not camera/world Y.
+        let boxToCamera = box.transformMatrix(relativeTo: camera)
+        let axis = SIMD3<Float>(boxToCamera.columns.2.x, boxToCamera.columns.2.y, boxToCamera.columns.2.z)
+        let normal = simd_normalize(axis)
+        let rim4 = boxToCamera * SIMD4<Float>(bounds.center.x, bounds.center.y, bounds.max.z, 1)
+        let rim = SIMD3<Float>(rim4.x, rim4.y, rim4.z)
+        let sourceRadius = simd_length(rig.closedBounds.extents * source.scale) / 2
+        let destinationRadius = simd_length(rig.closedBounds.extents * destination.scale) / 2
+        // A bounding sphere clears the rim throughout the rotation/scale blend.
+        let clearance = max(sourceRadius, destinationRadius)
+            + bounds.extents.z * simd_length(axis) * 0.06
+        func raised(_ pose: Transform) -> Transform {
+            var result = pose
+            let height = simd_dot(pose.translation - rim, normal)
+            result.translation += normal * max(0, clearance - height)
+            return result
+        }
+        extractionPose = raised(source)
+        approachPose = raised(destination)
     }
 
     private func makeCover() -> Entity {

@@ -7,6 +7,7 @@ enum GalleryConfig {
     static let albumCoverOpenDuration: TimeInterval = 0.8
     static let albumViewingDistance: Float = 0.55
     static let albumTravelDuration: TimeInterval = 0.75
+    static let albumExtractionDuration: TimeInterval = 0.45
     static let albumDragWidthFraction: CGFloat = 0.55
     static let albumTurnCommitProgress: Float = 0.4
     static let albumPageTextureWidth: CGFloat = 2048
