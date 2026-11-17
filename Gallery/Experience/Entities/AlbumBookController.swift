@@ -427,14 +427,21 @@ final class AlbumBookController {
         }
     }
 
-    /// Opening starts only the initial spread; neighbors are requested by
-    /// loadPage after the cover animation, using the normal reading cache.
+    /// Opening prioritizes the initial spread. As soon as it is prepared,
+    /// warm its neighbors during the remaining flight/cover animation.
     private func prepareAlbum(_ album: AlbumContent) {
         guard cachedAlbum != album else { return }
         pages = PhotoPage.paginate(album.photos)
         pageCache.configure(title: album.title, pages: pages)
         cachedAlbum = album
-        pageCache.onUpdate = { [weak self] index in self?.applyPreparedPage(index) }
+        pageCache.onUpdate = { [weak self] index in
+            guard let self else { return }
+            let initialPage = max(1, self.pageIndex)
+            if self.phase == .entering, self.pageCache.materials(at: initialPage) != nil {
+                self.pageCache.keepWindow(around: initialPage)
+            }
+            self.applyPreparedPage(index)
+        }
         let initialPage = min(rememberedPages[album.id, default: 1], pages.count)
         pageCache.keepWindow(around: max(1, initialPage), includeNeighbors: false)
     }

@@ -91,6 +91,12 @@ final class AlbumAnimationController {
         guard let leftPageHinge else { return }
         var destination = leftPageHinge.transform
         destination.rotation = simd_quatf(angle: open ? -openAngle : 0, axis: [0, 1, 0])
+        // The first spread has no left page. An invisible leaf needs no
+        // playback (and must not hold input until its completion timeout).
+        guard leftPageHinge.isEnabled else {
+            leftPageHinge.transform = destination
+            return
+        }
         await move(leftPageHinge, to: destination, relativeTo: paperRoot, duration: duration)
     }
 
