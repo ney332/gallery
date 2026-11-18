@@ -26,6 +26,7 @@ final class AlbumBookController {
     @ObservationIgnored private var turnTarget = 0
     @ObservationIgnored private var turnDirection = 0
     @ObservationIgnored private var dragProgress: Float = 0
+    @ObservationIgnored private var commitWhenPrepared = false
     @ObservationIgnored private var outgoingMaterials: AlbumPageMaterials?
     @ObservationIgnored private weak var sourceAlbum: Entity?
     @ObservationIgnored private var travelModel: Entity?
@@ -180,16 +181,18 @@ final class AlbumBookController {
     }
 
     func endPageDrag(predictedTranslation: CGSize) {
-        if phase == .preparing {
-            // A download must never trigger a stale gesture after finger-up.
-            cancelPageDrag()
-            return
-        }
-        guard phase == .dragging else { return }
         let distance = max(viewport.width * GalleryConfig.albumDragWidthFraction, 100)
         let predicted = Float(-predictedTranslation.width * CGFloat(turnDirection) / distance)
         let commit = dragProgress >= GalleryConfig.albumTurnCommitProgress
             || (dragProgress > 0.08 && predicted >= 0.65)
+        if phase == .preparing {
+            // Keep a completed user gesture while the target spread finishes
+            // loading. The page turn starts as soon as its textures are ready.
+            commitWhenPrepared = commit
+            if !commit { cancelPageDrag() }
+            return
+        }
+        guard phase == .dragging else { return }
         settleTurn(commit: commit)
     }
 
@@ -197,6 +200,7 @@ final class AlbumBookController {
         if phase == .dragging {
             settleTurn(commit: false)
         } else if phase == .preparing {
+            commitWhenPrepared = false
             turnID = UUID()
             turnTask?.cancel()
             turnTask = nil
@@ -224,6 +228,7 @@ final class AlbumBookController {
         turnTarget = next
         turnDirection = direction
         dragProgress = 0
+        commitWhenPrepared = automaticallyComplete
         outgoingMaterials = pageCache.materials(at: pageIndex)
         turnID = UUID()
         let token = turnID
@@ -245,7 +250,7 @@ final class AlbumBookController {
             if let materials { rig.setPhotos(materials) }
             phase = .dragging
             updateTurnPose()
-            if automaticallyComplete { settleTurn(commit: true) }
+            if self.commitWhenPrepared { settleTurn(commit: true) }
         }
 
         if next == 0 || pageCache.materials(at: next) != nil {
@@ -274,6 +279,7 @@ final class AlbumBookController {
     private func settleTurn(commit: Bool) {
         guard phase == .dragging, let rig = animationRig else { return }
         phase = .settling
+        commitWhenPrepared = false
         let session = readingSessionID
         let token = turnID
         let target = commit ? turnTarget : pageIndex
@@ -374,6 +380,7 @@ final class AlbumBookController {
         transitionTask = nil
         turnID = UUID()
         phase = .idle
+        commitWhenPrepared = false
         outgoingMaterials = nil
         failedTurnTarget = nil
         book?.stopAllAnimations(recursive: true)

@@ -17,6 +17,8 @@ struct BlenderAssetLoader {
             if case .room = asset {
                 let embeddedCameraCount = removeEmbeddedCameras(from: entity)
                 print("Removed \(embeddedCameraCount) embedded cameras from room asset")
+                let embeddedAlbumCount = removeEmbeddedAlbums(from: entity)
+                print("Removed \(embeddedAlbumCount) embedded albums from room asset")
                 configureShelfInteraction(in: entity)
                 configureDrawerInteraction(in: entity)
                 configureDeskInteraction(in: entity)
@@ -92,6 +94,28 @@ struct BlenderAssetLoader {
             removedCount += removeEmbeddedCameras(from: child)
         }
         return removedCount
+    }
+
+    /// The scene contains static `Album_…` display models positioned around
+    /// the boxes. Albums used by the app are loaded dynamically, so remove the
+    /// static scene copies while keeping every other imported object intact.
+    private func removeEmbeddedAlbums(from root: Entity) -> Int {
+        var albums: [Entity] = []
+        func collect(from entity: Entity) {
+            for child in entity.children {
+                if child.name.lowercased().hasPrefix("album_") {
+                    albums.append(child)
+                } else {
+                    collect(from: child)
+                }
+            }
+        }
+        collect(from: root)
+
+        for album in albums {
+            album.removeFromParent()
+        }
+        return albums.count
     }
 
     private func configureShelfInteraction(in root: Entity) {

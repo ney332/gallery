@@ -30,7 +30,7 @@ enum AssetManifest {
         .room: AssetDefinition(
             fileName: "world",
             fileExtension: "reality",
-            version: 1,
+            version: 2,
             logicalEntityName: "BaseScenario",
             animationNames: [:]
         ),
