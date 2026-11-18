@@ -39,15 +39,25 @@ struct ContentView: View {
             orbitController.attach(camera: camera, viewportSize: viewportSize)
 
             let room = await loader.load(.room)
+            
             albumController.clearAlbums()
+            
             scenarioAnimationController.attach(to: room)
+            
             windowInteractionController.attach(to: scenarioAnimationController.entity(for: .windowGlass))
+            //controler de luz no ambiente 
             sceneLightingController.attach(to: room, preset: .afternoon)
+            
             boxInteractionController.attach(to: room, camera: camera)
+            
             roomFallback.removeFromParent()
+            
             content.add(room)
+            
             let albumPrototype = await loader.load(.albumCover)
+            
             albumController.attach(prototype: albumPrototype, camera: camera)
+            
             albumController.updateViewport(viewportSize)
         } update: { _ in
             orbitController.updateViewport(viewportSize)

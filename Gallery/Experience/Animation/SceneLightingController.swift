@@ -44,7 +44,7 @@ final class SceneLightingController {
         lamp.name = "CodeBedsideLampLight"
         if let shade = findEntity(named: "Topo_do_Abajur", in: root) {
             let shadeBounds = shade.visualBounds(relativeTo: root)
-            lamp.position = shadeBounds.center - SIMD3<Float>(0, shadeBounds.extents.y * 0.35, 0)
+            lamp.position = shadeBounds.center - SIMD3<Float>(0, shadeBounds.extents.y * 0.65, 0)
         }
         var lampComponent = PointLightComponent()
         lampComponent.attenuationRadius = 2.0
@@ -91,18 +91,18 @@ final class SceneLightingController {
         case .morning:
             exteriorIntensity = 1_400
             exteriorColor = UIColor(red: 1.0, green: 0.84, blue: 0.68, alpha: 1)
-            interiorIntensity = 180
+            interiorIntensity = 190
             interiorColor = UIColor(red: 1.0, green: 0.91, blue: 0.78, alpha: 1)
         case .afternoon:
             exteriorIntensity = 1_800
             exteriorColor = .white
-            interiorIntensity = 120
+            interiorIntensity = 1200
             interiorColor = .white
         case .night:
-            exteriorIntensity = 100
-            exteriorColor = UIColor(red: 0.44, green: 0.56, blue: 0.82, alpha: 1)
-            interiorIntensity = 520
-            interiorColor = UIColor(red: 1.0, green: 0.78, blue: 0.55, alpha: 1)
+            exteriorIntensity = 8
+            exteriorColor = UIColor(red: 0.25, green: 0.35, blue: 0.62, alpha: 1)
+            interiorIntensity = 1
+            interiorColor = UIColor(red: 0.45, green: 0.50, blue: 0.65, alpha: 1)
         }
 
         if var light = exteriorLight?.components[DirectionalLightComponent.self] {
