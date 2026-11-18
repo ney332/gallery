@@ -17,6 +17,8 @@ struct ContentView: View {
     @State private var isDragging = false
     @State private var isDraggingPhotoCard = false
     @State private var isDraggingPhotoCardFromBack = false
+    @State private var selectedPhotoMarkupTool: PhotoMarkupTool = .pen
+    @State private var isPhotoMarkupToolbarExpanded = false
     @State private var photoDrawingData = Data()
     @State private var annotationSaveTask: Task<Void, Never>?
     @State private var annotationSaveFailed = false
@@ -197,6 +199,7 @@ struct ContentView: View {
                     .padding(.bottom, 24)
             }
         }
+        .overlay(alignment: .bottom) { photoMarkupToolbar }
         .task { await libraryModel.load() }
         .onChange(of: boxInteractionController.phase) { _, _ in refreshAlbums() }
         .onChange(of: boxInteractionController.canAccessAlbums) { _, _ in refreshAlbums() }
@@ -255,6 +258,8 @@ struct ContentView: View {
             guard !photoInteractionController.isOpen,
                   let photoID = albumController.photoID(containing: entity) else { return }
             photoDrawingData = Data()
+            selectedPhotoMarkupTool = .pen
+            isPhotoMarkupToolbarExpanded = false
             annotationSaveFailed = false
             isLoadingAnnotation = true
             photoInteractionController.open(photoID: photoID, from: entity)
@@ -470,7 +475,10 @@ struct ContentView: View {
                    !photoInteractionController.isTransitioning,
                    !isDraggingPhotoCardFromBack {
                     let canvasHeight = viewportSize.height * photoInteractionController.annotationCanvasHeightFraction
-                    PhotoAnnotationCanvas(drawingData: $photoDrawingData)
+                    PhotoAnnotationCanvas(
+                        drawingData: $photoDrawingData,
+                        selectedTool: selectedPhotoMarkupTool
+                    )
                         .frame(width: canvasHeight * photoInteractionController.photoAspectRatio, height: canvasHeight)
                 }
             }
@@ -526,17 +534,72 @@ struct ContentView: View {
     }
 
     private var photoCardStatus: some View {
-        VStack(spacing: 8) {
-            if photoInteractionController.isLoadingPhoto { ProgressView("album.loading") }
-            if photoInteractionController.photoLoadFailed { Text("photo.load.failed") }
-            if annotationSaveFailed {
-                Button("photo.annotation.retry") { saveAnnotationNow() }
+        Group {
+            if photoInteractionController.photoLoadFailed || annotationSaveFailed {
+                VStack(spacing: 8) {
+                    if photoInteractionController.photoLoadFailed { Text("photo.load.failed") }
+                    if annotationSaveFailed {
+                        Button("photo.annotation.retry") { saveAnnotationNow() }
+                    }
+                }
+                .padding(12)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, 24)
+                .padding(.bottom, 28)
             }
         }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal, 24)
-        .padding(.bottom, 28)
+        .frame(maxWidth: .infinity)
+        .allowsHitTesting(photoInteractionController.photoLoadFailed || annotationSaveFailed)
+    }
+
+    @ViewBuilder
+    private var photoMarkupToolbar: some View {
+        if photoInteractionController.isBackVisible,
+           !photoInteractionController.isTransitioning {
+            HStack(spacing: 10) {
+                Button {
+                    withAnimation(.spring(response: 0.36, dampingFraction: 0.78)) {
+                        isPhotoMarkupToolbarExpanded.toggle()
+                    }
+                } label: {
+                    Image(systemName: isPhotoMarkupToolbarExpanded ? "xmark" : "square.and.pencil")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 44, height: 44)
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .accessibilityLabel(isPhotoMarkupToolbarExpanded ? "Fechar ferramentas" : "Editar anotação")
+
+                if isPhotoMarkupToolbarExpanded {
+                    Rectangle().fill(.white.opacity(0.22)).frame(width: 1, height: 26)
+                        .transition(.scale.combined(with: .opacity))
+
+                    ForEach(PhotoMarkupTool.allCases) { tool in
+                        Button {
+                            selectedPhotoMarkupTool = tool
+                        } label: {
+                            Image(systemName: tool.symbol)
+                                .font(.system(size: 17, weight: .medium))
+                                .foregroundStyle(selectedPhotoMarkupTool == tool ? .black : .white)
+                                .frame(width: 40, height: 40)
+                                .background {
+                                    if selectedPhotoMarkupTool == tool { Circle().fill(.white) }
+                                }
+                        }
+                        .accessibilityLabel(tool.accessibilityTitle)
+                        .transition(.scale.combined(with: .opacity))
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(6)
+            .foregroundStyle(.white)
+            .background(.ultraThinMaterial.opacity(0.96), in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(0.16), lineWidth: 1))
+            .shadow(color: .black.opacity(0.22), radius: 16, y: 6)
+            .padding(.bottom, 26)
+            .frame(maxWidth: .infinity)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
     }
 
     private func shelfAncestor(from entity: Entity) -> Entity? {
