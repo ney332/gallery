@@ -143,9 +143,9 @@ struct ContentView: View {
                         Label(photoInteractionController.isOpen ? "photo.back.book" : "album.back.box",
                               systemImage: "arrow.left")
                     }
-                    .disabled(albumController.phase == .returning || photoInteractionController.isTransitioning)
-                    Text(albumController.activeAlbum?.title ?? "")
-                        .font(.headline)
+//                    .disabled(albumController.phase == .returning || photoInteractionController.isTransitioning)
+//                    Text(albumController.activeAlbum?.title ?? "")
+//                        .font(.headline)
                 }
                 .padding(12)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
@@ -157,12 +157,12 @@ struct ContentView: View {
                         albumController.clearAlbums()
                         boxInteractionController.returnToShelf()
                     } label: {
-                        Label("Voltar à estante", systemImage: "arrow.uturn.backward")
+                        Label("voltar", systemImage: "arrow.uturn.backward")
                     }
                     .disabled(boxInteractionController.phase == .returning)
                     if boxInteractionController.phase == .waitingForTape {
-                        Text("Arraste a fita para cima")
-                            .font(.callout)
+//                        Text("Arraste a fita para cima")
+//                            .font(.callout)
                     }
                 }
                 .padding(12)
@@ -173,10 +173,10 @@ struct ContentView: View {
                 Button {
                     orbitController.returnFromShelf()
                 } label: {
-                    Label("Voltar ao quarto", systemImage: "arrow.left")
+                    Label("voltar", systemImage: "arrow.left")//voltar ao quarto
                         .padding(12)
                         .frame(minHeight: 44)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 52)
@@ -191,7 +191,7 @@ struct ContentView: View {
             } else if boxInteractionController.canAccessAlbums {
                 albumLibraryStatus
             } else if libraryModel.access == .denied || libraryModel.access == .restricted {
-                Text("gallery.permission.denied")
+                Text("gallery permission denied")
                     .font(.callout)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
@@ -418,20 +418,17 @@ struct ContentView: View {
             || libraryModel.loadFailed || albumController.albums.isEmpty {
             VStack(spacing: 10) {
                 if libraryModel.isLoading || !albumController.isPrepared {
-                    ProgressView("album.loading")
+//                    ProgressView("album.loading")
                 } else if libraryModel.access == .denied || libraryModel.access == .restricted {
-                    Text("gallery.permission.denied")
+                    Text("gallery permission denied")
                 } else if libraryModel.loadFailed {
-                    Text("album.library.failed")
-                    Button("album.retry") { Task { await libraryModel.load() } }
+                    Text("")
+                    Button("album retry") { Task { await libraryModel.load() } }
                 } else {
-                    Text("album.box.empty")
+                    Text("Não há fotos no periodo")
                 }
             }
-            .padding(12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-            .padding(.horizontal, 24)
-            .padding(.bottom, 28)
+//
         }
     }
 
@@ -441,30 +438,30 @@ struct ContentView: View {
             VStack(spacing: 8) {
                 if albumController.isLoadingPage { ProgressView("album.loading") }
                 if albumController.hasUnavailablePhotos {
-                    Button("album.retry") { albumController.retryPage() }
+                    Button("album retry") { albumController.retryPage() }
                         .disabled(albumController.isTurningPage)
                 }
             }
-            .padding(12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-            .padding(.horizontal, 24)
-            .padding(.bottom, 28)
+//            .padding(12)
+//            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+//            .padding(.horizontal, 24)
+//            .padding(.bottom, 28)
         }
     }
 
     @ViewBuilder
     private var photoCardControls: some View {
-        if photoInteractionController.isOpen {
-            Button { closePhotoCard() } label: {
-                Image(systemName: "xmark").frame(width: 44, height: 44)
-            }
-            .accessibilityLabel("photo.close")
-            .disabled(photoInteractionController.isTransitioning || isLoadingAnnotation)
-            .padding(12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-            .padding(.horizontal, 24)
-            .padding(.top, 52)
-        }
+//        if photoInteractionController.isOpen {
+//            Button { closePhotoCard() } label: {
+//                Image(systemName: "xmark").frame(width: 44, height: 44)
+//            }
+//            .accessibilityLabel("photo.close")
+//            .disabled(photoInteractionController.isTransitioning || isLoadingAnnotation)
+//            .padding(12)
+//            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+//            .padding(.horizontal, 24)
+//            .padding(.top, 52)
+//        }
     }
 
     @ViewBuilder
@@ -616,7 +613,7 @@ struct ContentView: View {
     private func drawerAncestor(from entity: Entity) -> Entity? {
         var current: Entity? = entity
         while let candidate = current {
-            if candidate.name.compare("Gaveta_Cima", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+            if candidate.name.compare("Gaveta_Meio", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
                 return candidate
             }
             current = candidate.parent
