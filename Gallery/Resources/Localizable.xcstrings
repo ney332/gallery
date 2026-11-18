@@ -1,9 +1,6 @@
 {
   "sourceLanguage" : "pt-BR",
   "strings" : {
-    "" : {
-
-    },
     "album.back.box" : {
       "localizations" : {
         "pt-BR" : {
@@ -150,6 +147,68 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Acesso limitado às fotos"
+          }
+        }
+      }
+    },
+    "photo.annotation.retry" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tentar salvar a anotação novamente"
+          }
+        }
+      }
+    },
+    "photo.back.book" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voltar ao álbum"
+          }
+        }
+      }
+    },
+    "photo.close" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fechar foto"
+          }
+        }
+      }
+    },
+    "photo.load.failed" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível carregar esta foto."
+          }
+        }
+      }
+    },
+    "photo.show.front" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver frente"
+          }
+        }
+      }
+    },
+    "photo.write.back" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escrever no verso"
           }
         }
       }

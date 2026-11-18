@@ -205,6 +205,16 @@ final class AlbumAnimationController {
         applyMaterials()
     }
 
+    func photoSlot(containing entity: Entity) -> Int? {
+        var current: Entity? = entity
+        while let candidate = current {
+            if candidate === leftSurface { return 0 }
+            if candidate === rightSurface { return 1 }
+            current = candidate.parent
+        }
+        return nil
+    }
+
     private func applyMaterials() {
         // No synthetic paper or photo lies on the inside cover in spread one.
         // During a forward turn, the left page arrives with the moving leaf.
@@ -281,6 +291,13 @@ final class AlbumAnimationController {
             }
             let front = Self.surface(width: width, height: height, back: false)
             let back = Self.surface(width: width, height: height, back: true)
+            front.name = index == 0 ? "AlbumPhotoFace.Left" : "AlbumPhotoFace.Right"
+            back.name = "AlbumPhotoFace.Back.\(index)"
+            let photoHitArea = ShapeResource.generateBox(size: [width * 0.88, height * 0.80, 0.012])
+            for face in [front, back] {
+                face.components.set(CollisionComponent(shapes: [photoHitArea]))
+                face.components.set(InputTargetComponent())
+            }
             pivot.addChild(front)
             pivot.addChild(back)
             if index == 0 {

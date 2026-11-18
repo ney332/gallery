@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 
 @MainActor
@@ -31,6 +32,26 @@ final class GalleryLibraryModel {
                 Task { @MainActor in await self?.reloadAfterChange() }
             }
         }
+    }
+
+    func annotation(for photoID: String) async throws -> PhotoAnnotation? {
+        try await annotationRepository.find(for: photoID)
+    }
+
+    func saveAnnotationDrawing(_ drawingData: Data, for photoID: String) async throws {
+        guard !drawingData.isEmpty else {
+            try await annotationRepository.delete(for: photoID)
+            return
+        }
+        let existing = try await annotationRepository.find(for: photoID)
+        let annotation = PhotoAnnotation(
+            id: existing?.id ?? UUID(),
+            photoIdentifier: photoID,
+            drawingData: drawingData,
+            createdAt: existing?.createdAt ?? .now,
+            updatedAt: .now
+        )
+        try await annotationRepository.save(annotation)
     }
 
     private func reloadAfterChange() async {

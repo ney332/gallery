@@ -150,6 +150,14 @@ final class AlbumBookController {
         return nil
     }
 
+    func photoID(containing entity: Entity) -> String? {
+        guard phase == .reading, pageIndex > 0, pages.indices.contains(pageIndex - 1),
+              let slot = animationRig?.photoSlot(containing: entity),
+              let photoIndex = pages[pageIndex - 1].photoIndex(forSlot: slot),
+              pages[pageIndex - 1].photos.indices.contains(photoIndex) else { return nil }
+        return pages[pageIndex - 1].photos[photoIndex].id
+    }
+
     func select(_ id: String) {
         guard interactionEnabled, !isReading, let album = albums.first(where: { $0.id == id }) else { return }
         if selectedAlbumID == id {

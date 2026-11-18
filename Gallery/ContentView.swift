@@ -1,4 +1,5 @@
 import RealityKit
+import PencilKit
 import SwiftUI
 
 struct ContentView: View {
@@ -8,11 +9,18 @@ struct ContentView: View {
     @State private var sceneLightingController = SceneLightingController()
     @State private var boxInteractionController: BoxInteractionController
     @State private var albumController = AlbumBookController()
+    @State private var photoInteractionController = PhotoInteractionController()
     @State private var windowInteractionController = WindowInteractionController()
     @GestureState private var isPressingWindow = false
     @GestureState private var isPageGestureActive = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var isDragging = false
+    @State private var isDraggingPhotoCard = false
+    @State private var isDraggingPhotoCardFromBack = false
+    @State private var photoDrawingData = Data()
+    @State private var annotationSaveTask: Task<Void, Never>?
+    @State private var annotationSaveFailed = false
+    @State private var isLoadingAnnotation = false
 
     init(libraryModel: GalleryLibraryModel, boxSessionState: BoxSessionState) {
         self.libraryModel = libraryModel
@@ -37,6 +45,7 @@ struct ContentView: View {
             let camera = SceneCamera.makeOverviewCamera()
             content.add(camera)
             orbitController.attach(camera: camera, viewportSize: viewportSize)
+            photoInteractionController.attach(camera: camera)
 
             let room = await loader.load(.room)
             
@@ -66,53 +75,7 @@ struct ContentView: View {
         .simultaneousGesture(
             TapGesture()
                 .targetedToAnyEntity()
-                .onEnded { value in
-                    if albumController.isReading { return }
-                    if boxInteractionController.canAccessAlbums,
-                       let id = albumController.albumID(containing: value.entity) {
-                        albumController.select(id)
-                        return
-                    }
-                    guard !boxInteractionController.isActive,
-                          !windowInteractionController.isDragging,
-                          !windowInteractionController.contains(value.entity) else { return }
-                    if let box = boxInteractionController.box(containing: value.entity) {
-                        if !orbitController.isShelfFocused {
-                            if let shelf = scenarioAnimationController.entity(for: .archiveShelf) {
-                                orbitController.toggleFocus(on: shelf)
-                            }
-                        } else if orbitController.isShelfFocusReady {
-                            boxInteractionController.present(box, viewport: viewportSize)
-                            refreshAlbums()
-                        }
-                        return
-                    }
-                    if let drawer = drawerAncestor(from: value.entity) {
-                        guard scenarioAnimationController.toggleTopDrawer() else { return }
-                        orbitController.toggleFocus(
-                            on: drawer,
-                            lookingFromFront: true,
-                            pitchDegrees: 32,
-                            minimumRadius: 0.75
-                        )
-                        return
-                    }
-                    if let desk = deskAncestor(from: value.entity) {
-                        orbitController.toggleFocus(
-                            on: desk,
-                            lookingFromFront: true,
-                            pitchDegrees: 75,
-                            minimumRadius: 1.15
-                        )
-                        return
-                    }
-                    if lampAncestor(from: value.entity) != nil {
-                        sceneLightingController.toggleLamp()
-                        return
-                    }
-                    guard let shelf = shelfAncestor(from: value.entity) else { return }
-                    orbitController.toggleFocus(on: shelf)
-                }
+                .onEnded { value in handleEntityTap(value.entity, viewportSize: viewportSize) }
         )
         .simultaneousGesture(
             DragGesture(minimumDistance: 0, coordinateSpace: .local)
@@ -151,44 +114,33 @@ struct ContentView: View {
                 .updating($isPageGestureActive) { _, state, _ in
                     state = albumController.isReading
                 }
-                .onChanged { value in
-                    if albumController.isReading {
-                        albumController.updatePageDrag(translation: value.translation)
-                        return
-                    }
-                    guard !boxInteractionController.isActive,
-                          !isPressingWindow, !windowInteractionController.isDragging else { return }
-                    if !isDragging {
-                        isDragging = true
-                        orbitController.beginDrag()
-                    }
-                    orbitController.updateDrag(translation: value.translation)
-                }
-                .onEnded { value in
-                    if albumController.isReading {
-                        albumController.endPageDrag(predictedTranslation: value.predictedEndTranslation)
-                        return
-                    }
-                    isDragging = false
-                    orbitController.endDrag()
-                }
+                .onChanged { value in handleContinuousDrag(value.translation, viewportSize: viewportSize) }
+                .onEnded { value in handleContinuousDragEnd(value) }
         )
         .simultaneousGesture(
             MagnifyGesture() //permite zoom em pinça
                 .onChanged {
                     guard !boxInteractionController.isActive,
+                          !photoInteractionController.isOpen,
                           !isPressingWindow, !windowInteractionController.isDragging else { return }
                     orbitController.updateZoom(magnification: $0.magnification)
                 }
                 .onEnded { _ in orbitController.endZoom() }
         )
+        // Keep the full-screen annotation gesture below navigation controls so
+        // the back and close buttons remain tappable while the card is flipped.
+        .overlay { photoAnnotationOverlay(viewportSize: viewportSize) }
         .overlay(alignment: .topLeading) {
             if albumController.isReading {
                 HStack(spacing: 16) {
-                    Button { albumController.closeBook() } label: {
-                        Label("album.back.box", systemImage: "arrow.left")
+                    Button {
+                        if photoInteractionController.isOpen { closePhotoCard() }
+                        else { albumController.closeBook() }
+                    } label: {
+                        Label(photoInteractionController.isOpen ? "photo.back.book" : "album.back.box",
+                              systemImage: "arrow.left")
                     }
-                    .disabled(albumController.phase == .returning)
+                    .disabled(albumController.phase == .returning || photoInteractionController.isTransitioning)
                     Text(albumController.activeAlbum?.title ?? "")
                         .font(.headline)
                 }
@@ -207,9 +159,6 @@ struct ContentView: View {
                     .disabled(boxInteractionController.phase == .returning)
                     if boxInteractionController.phase == .waitingForTape {
                         Text("Arraste a fita para cima")
-                            .font(.callout)
-                    } else if boxInteractionController.phase == .ready {
-                        Text("")
                             .font(.callout)
                     }
                 }
@@ -230,8 +179,11 @@ struct ContentView: View {
                 .padding(.top, 52)
             }
         }
+        .overlay(alignment: .topTrailing) { photoCardControls }
         .overlay(alignment: .bottom) {
-            if albumController.isReading {
+            if photoInteractionController.isOpen {
+                photoCardStatus
+            } else if albumController.isReading {
                 bookStatus
             } else if boxInteractionController.canAccessAlbums {
                 albumLibraryStatus
@@ -263,14 +215,21 @@ struct ContentView: View {
                 }
             }
         }
+        .onChange(of: photoDrawingData) { _, _ in
+            guard photoInteractionController.isBackVisible else { return }
+            scheduleAnnotationSave()
+        }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active {
-                windowInteractionController.endDrag()
-                albumController.cancelPageDrag()
-            }
+            handleScenePhaseChange(phase)
         }
         .onDisappear {
             windowInteractionController.endDrag()
+            annotationSaveTask?.cancel()
+            if let photoID = photoInteractionController.selectedPhotoID {
+                let drawingData = photoDrawingData
+                Task { try? await libraryModel.saveAnnotationDrawing(drawingData, for: photoID) }
+            }
+            photoInteractionController.close()
             albumController.clearAlbums()
             boxInteractionController.resetPresentation()
         }
@@ -288,6 +247,162 @@ struct ContentView: View {
         let hasAccess = libraryModel.access == .authorized || libraryModel.access == .limited
         albumController.showAlbums(hasAccess ? libraryModel.albums(forBoxSlot: slot) : [], in: box, bounds: bounds)
         albumController.setInteractionEnabled(boxInteractionController.canAccessAlbums && hasAccess)
+    }
+
+    private func handleEntityTap(_ entity: Entity, viewportSize: CGSize) {
+        if albumController.isReading {
+            guard !photoInteractionController.isOpen,
+                  let photoID = albumController.photoID(containing: entity) else { return }
+            photoDrawingData = Data()
+            annotationSaveFailed = false
+            isLoadingAnnotation = true
+            photoInteractionController.open(photoID: photoID, from: entity)
+            Task {
+                let annotation = try? await libraryModel.annotation(for: photoID)
+                guard photoInteractionController.selectedPhotoID == photoID else { return }
+                photoDrawingData = annotation?.drawingData ?? Data()
+                isLoadingAnnotation = false
+            }
+            return
+        }
+        if boxInteractionController.canAccessAlbums,
+           let id = albumController.albumID(containing: entity) {
+            albumController.select(id)
+            return
+        }
+        guard !boxInteractionController.isActive,
+              !windowInteractionController.isDragging,
+              !windowInteractionController.contains(entity) else { return }
+        if let box = boxInteractionController.box(containing: entity) {
+            if !orbitController.isShelfFocused {
+                if let shelf = scenarioAnimationController.entity(for: .archiveShelf) {
+                    orbitController.toggleFocus(on: shelf)
+                }
+            } else if orbitController.isShelfFocusReady {
+                boxInteractionController.present(box, viewport: viewportSize)
+                refreshAlbums()
+            }
+            return
+        }
+        if let drawer = drawerAncestor(from: entity) {
+            guard scenarioAnimationController.toggleTopDrawer() else { return }
+            orbitController.toggleFocus(on: drawer, lookingFromFront: true, pitchDegrees: 32, minimumRadius: 0.75)
+            return
+        }
+        if let desk = deskAncestor(from: entity) {
+            orbitController.toggleFocus(on: desk, lookingFromFront: true, pitchDegrees: 75, minimumRadius: 1.15)
+            return
+        }
+        if lampAncestor(from: entity) != nil {
+            sceneLightingController.toggleLamp()
+            return
+        }
+        guard let shelf = shelfAncestor(from: entity) else { return }
+        orbitController.toggleFocus(on: shelf)
+    }
+
+    private func handleContinuousDrag(_ translation: CGSize, viewportSize: CGSize) {
+        if albumController.isReading {
+            if photoInteractionController.isOpen {
+                // While the back is visible, let PencilKit own drags on the
+                // page. Tapping outside it flips the card back to the photo.
+                guard !photoInteractionController.isBackVisible else { return }
+                if !isDraggingPhotoCard {
+                    isDraggingPhotoCard = true
+                    photoInteractionController.beginDrag()
+                }
+                photoInteractionController.updateDrag(
+                    translation: translation,
+                    viewportSize: viewportSize
+                )
+            } else {
+                albumController.updatePageDrag(translation: translation)
+            }
+            return
+        }
+        guard !boxInteractionController.isActive,
+              !isPressingWindow, !windowInteractionController.isDragging else { return }
+        if !isDragging {
+            isDragging = true
+            orbitController.beginDrag()
+        }
+        orbitController.updateDrag(translation: translation)
+    }
+
+    private func handleContinuousDragEnd(_ value: DragGesture.Value) {
+        if albumController.isReading {
+            if photoInteractionController.isOpen {
+                if isDraggingPhotoCard {
+                    isDraggingPhotoCard = false
+                    photoInteractionController.endDrag()
+                }
+            } else {
+                albumController.endPageDrag(predictedTranslation: value.predictedEndTranslation)
+            }
+            return
+        }
+        isDragging = false
+        orbitController.endDrag()
+    }
+
+    private func handleScenePhaseChange(_ phase: ScenePhase) {
+        guard phase != .active else { return }
+        windowInteractionController.endDrag()
+        albumController.cancelPageDrag()
+        if photoInteractionController.isOpen { closePhotoCard() }
+    }
+
+    private func scheduleAnnotationSave() {
+        guard let photoID = photoInteractionController.selectedPhotoID else { return }
+        annotationSaveTask?.cancel()
+        annotationSaveFailed = false
+        let drawingData = photoDrawingData
+        annotationSaveTask = Task {
+            do {
+                try await Task.sleep(for: .milliseconds(500))
+                try await libraryModel.saveAnnotationDrawing(drawingData, for: photoID)
+                guard !Task.isCancelled else { return }
+                annotationSaveFailed = false
+            } catch {
+                guard !Task.isCancelled else { return }
+                annotationSaveFailed = true
+            }
+        }
+    }
+
+    private func saveAnnotationNow() {
+        guard let photoID = photoInteractionController.selectedPhotoID else { return }
+        annotationSaveTask?.cancel()
+        let drawingData = photoDrawingData
+        annotationSaveTask = Task {
+            do {
+                try await libraryModel.saveAnnotationDrawing(drawingData, for: photoID)
+                annotationSaveFailed = false
+            } catch {
+                annotationSaveFailed = true
+            }
+        }
+    }
+
+    private func closePhotoCard() {
+        guard let photoID = photoInteractionController.selectedPhotoID else {
+            photoInteractionController.close()
+            return
+        }
+        annotationSaveTask?.cancel()
+        let drawingData = photoDrawingData
+        Task {
+            do {
+                try await libraryModel.saveAnnotationDrawing(drawingData, for: photoID)
+                annotationSaveFailed = false
+            } catch {
+                annotationSaveFailed = true
+                return
+            }
+            photoInteractionController.close()
+            photoDrawingData = Data()
+            isLoadingAnnotation = false
+        }
     }
 
     @ViewBuilder
@@ -329,6 +444,98 @@ struct ContentView: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 28)
         }
+    }
+
+    @ViewBuilder
+    private var photoCardControls: some View {
+        if photoInteractionController.isOpen {
+            Button { closePhotoCard() } label: {
+                Image(systemName: "xmark").frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("photo.close")
+            .disabled(photoInteractionController.isTransitioning || isLoadingAnnotation)
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 24)
+            .padding(.top, 52)
+        }
+    }
+
+    @ViewBuilder
+    private func photoAnnotationOverlay(viewportSize: CGSize) -> some View {
+        if photoInteractionController.isBackVisible {
+            ZStack {
+                if !isLoadingAnnotation,
+                   !photoInteractionController.isTransitioning,
+                   !isDraggingPhotoCardFromBack {
+                    let canvasHeight = viewportSize.height * photoInteractionController.annotationCanvasHeightFraction
+                    PhotoAnnotationCanvas(drawingData: $photoDrawingData)
+                        .frame(width: canvasHeight * 0.54 / 0.69, height: canvasHeight)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                SpatialTapGesture(coordinateSpace: .local)
+                    .onEnded { value in
+                        guard photoInteractionController.isBackVisible else { return }
+                        // Leave the top navigation controls their own tap action.
+                        let topControls = CGRect(x: 0, y: 0, width: viewportSize.width, height: 150)
+                        if !photoPageRect(in: viewportSize).contains(value.location)
+                            && !topControls.contains(value.location) {
+                            photoInteractionController.flip()
+                        }
+                    }
+            )
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 8, coordinateSpace: .local)
+                    .onChanged { value in
+                        let topControls = CGRect(x: 0, y: 0, width: viewportSize.width, height: 150)
+                        guard !photoPageRect(in: viewportSize).contains(value.startLocation),
+                              !topControls.contains(value.startLocation),
+                              !photoInteractionController.isTransitioning else { return }
+                        if !isDraggingPhotoCardFromBack {
+                            isDraggingPhotoCardFromBack = true
+                            photoInteractionController.beginDrag()
+                        }
+                        photoInteractionController.updateDrag(
+                            translation: value.translation,
+                            viewportSize: viewportSize
+                        )
+                    }
+                    .onEnded { _ in
+                        if isDraggingPhotoCardFromBack {
+                            isDraggingPhotoCardFromBack = false
+                            photoInteractionController.endDrag()
+                        }
+                    }
+            )
+        }
+    }
+
+    private func photoPageRect(in viewportSize: CGSize) -> CGRect {
+        let pageHeight = viewportSize.height * photoInteractionController.annotationCanvasHeightFraction
+        let pageWidth = pageHeight * 0.54 / 0.69
+        return CGRect(
+            x: (viewportSize.width - pageWidth) / 2,
+            y: (viewportSize.height - pageHeight) / 2,
+            width: pageWidth,
+            height: pageHeight
+        )
+    }
+
+    private var photoCardStatus: some View {
+        VStack(spacing: 8) {
+            if photoInteractionController.isLoadingPhoto { ProgressView("album.loading") }
+            if photoInteractionController.photoLoadFailed { Text("photo.load.failed") }
+            if annotationSaveFailed {
+                Button("photo.annotation.retry") { saveAnnotationNow() }
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 24)
+        .padding(.bottom, 28)
     }
 
     private func shelfAncestor(from entity: Entity) -> Entity? {
