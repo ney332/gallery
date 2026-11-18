@@ -12,11 +12,19 @@ final class PhotoInteractionController {
     private(set) var isTransitioning = false
     private(set) var isLoadingPhoto = false
     private(set) var photoLoadFailed = false
+    private(set) var photoAspectRatio: CGFloat = 0.54 / 0.69
 
     @ObservationIgnored private weak var camera: Entity?
     @ObservationIgnored private var card: Entity?
+    @ObservationIgnored private var cardContent: Entity?
+    @ObservationIgnored private var cardBody: ModelEntity?
     @ObservationIgnored private var frontSurface: ModelEntity?
+    @ObservationIgnored private var backSurface: ModelEntity?
     @ObservationIgnored private var cardHome = Transform()
+    @ObservationIgnored private var viewportSize = CGSize(width: 1, height: 1)
+    @ObservationIgnored private var cardWidth: Float = 0.54
+    @ObservationIgnored private var cardHeight: Float = 0.69
+    @ObservationIgnored private var contentFitScale: Float = 1
     @ObservationIgnored private var rotation: Float = 0
     @ObservationIgnored private var pitch: Float = 0
     @ObservationIgnored private var dragStartRotation: Float = 0
@@ -34,14 +42,20 @@ final class PhotoInteractionController {
         let depth = max(GalleryConfig.albumViewingDistance - 0.17, 0.32)
         let scale = depth / 0.88
         let fieldOfView = camera?.components[PerspectiveCameraComponent.self]?.fieldOfViewInDegrees ?? 50.2
-        let faceHeight = 0.69 * 0.92 * scale
+        let faceHeight = cardHeight * 0.92 * scale * contentFitScale
         let viewHeightAtCard = 2 * depth * tan(fieldOfView * .pi / 360)
         return CGFloat(faceHeight / viewHeightAtCard)
     }
 
-    func attach(camera: Entity) {
+    func attach(camera: Entity, viewportSize: CGSize) {
         close()
         self.camera = camera
+        updateViewport(viewportSize)
+    }
+
+    func updateViewport(_ viewportSize: CGSize) {
+        self.viewportSize = viewportSize
+        updateContentFitScale()
     }
 
     func open(photoID: String, from source: Entity) {
@@ -53,18 +67,27 @@ final class PhotoInteractionController {
         photoLoadFailed = false
         rotation = 0
         pitch = 0
+        photoAspectRatio = 0.54 / 0.69
+        cardWidth = 0.54
+        cardHeight = 0.69
+        contentFitScale = 1
 
         let width: Float = 0.54
         let height: Float = 0.69
         let root = Entity()
         root.name = "SelectedPhotoCard"
+        let content = Entity()
+        content.name = "PhotoCardContent"
+        root.addChild(content)
+        cardContent = content
 
         let body = ModelEntity(
             mesh: .generateBox(size: [width, height, 0.012]),
             materials: [SimpleMaterial(color: UIColor(red: 0.96, green: 0.94, blue: 0.89, alpha: 1),
                                        roughness: 0.92, isMetallic: false)]
         )
-        root.addChild(body)
+        content.addChild(body)
+        cardBody = body
 
         let front = ModelEntity(
             mesh: .generatePlane(width: width * 0.92, height: height * 0.92),
@@ -72,7 +95,7 @@ final class PhotoInteractionController {
         )
         front.name = "PhotoCardFront"
         front.position.z = 0.007
-        root.addChild(front)
+        content.addChild(front)
         frontSurface = front
 
         let back = ModelEntity(
@@ -83,7 +106,8 @@ final class PhotoInteractionController {
         back.name = "PhotoCardBack"
         back.position.z = -0.007
         back.orientation = simd_quatf(angle: .pi, axis: [0, 1, 0])
-        root.addChild(back)
+        content.addChild(back)
+        backSurface = back
 
         let worldCenter = source.visualBounds(relativeTo: nil).center
         let cameraSpace = simd_inverse(camera.transformMatrix(relativeTo: nil))
@@ -175,7 +199,10 @@ final class PhotoInteractionController {
             guard let self else { return }
             card?.removeFromParent()
             self.card = nil
+            self.cardContent = nil
+            self.cardBody = nil
             self.frontSurface = nil
+            self.backSurface = nil
             self.resetState()
         }
     }
@@ -204,12 +231,51 @@ final class PhotoInteractionController {
     }
 
     private func apply(_ image: UIImage, for token: UUID) {
-        guard presentationID == token, let cgImage = image.cgImage,
-              let frontSurface,
+        guard presentationID == token, let frontSurface else { return }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let normalizedImage = UIGraphicsImageRenderer(size: image.size, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: image.size))
+        }
+        guard let cgImage = normalizedImage.cgImage,
               let texture = try? TextureResource(image: cgImage, options: .init(semantic: .color)) else { return }
+        updateCardGeometry(for: normalizedImage)
         var material = UnlitMaterial()
         material.color = .init(tint: .white, texture: .init(texture))
         frontSurface.model?.materials = [material]
+    }
+
+    private func updateCardGeometry(for image: UIImage) {
+        let ratio = max(image.size.width / max(image.size.height, 1), 0.1)
+        photoAspectRatio = ratio
+
+        // Keep the longest edge at the existing card size. The animated root
+        // and its depth stay untouched; only the inner model changes shape.
+        let longSide: Float = 0.69
+        if ratio >= 1 {
+            cardWidth = longSide
+            cardHeight = longSide / Float(ratio)
+        } else {
+            cardHeight = longSide
+            cardWidth = longSide * Float(ratio)
+        }
+        cardBody?.model?.mesh = .generateBox(size: [cardWidth, cardHeight, 0.012])
+        frontSurface?.model?.mesh = .generatePlane(width: cardWidth * 0.92, height: cardHeight * 0.92)
+        backSurface?.model?.mesh = .generatePlane(width: cardWidth * 0.92, height: cardHeight * 0.92)
+        updateContentFitScale()
+    }
+
+    private func updateContentFitScale() {
+        let depth = max(GalleryConfig.albumViewingDistance - 0.17, 0.32)
+        let baseScale = depth / 0.88
+        let fov = camera?.components[PerspectiveCameraComponent.self]?.fieldOfViewInDegrees ?? 50.2
+        let visibleHeight = 2 * depth * tan(fov * .pi / 360)
+        let visibleWidth = visibleHeight * Float(viewportSize.width / max(viewportSize.height, 1))
+        let widthFit = visibleWidth * 0.88 / max(cardWidth * baseScale, 0.001)
+        let heightFit = visibleHeight * 0.88 / max(cardHeight * baseScale, 0.001)
+        contentFitScale = min(1, min(widthFit, heightFit))
+        cardContent?.scale = [contentFitScale, contentFitScale, 1]
     }
 
     private func resetState() {
@@ -218,6 +284,10 @@ final class PhotoInteractionController {
         isTransitioning = false
         isLoadingPhoto = false
         photoLoadFailed = false
+        photoAspectRatio = 0.54 / 0.69
+        cardWidth = 0.54
+        cardHeight = 0.69
+        contentFitScale = 1
         rotation = 0
         pitch = 0
     }

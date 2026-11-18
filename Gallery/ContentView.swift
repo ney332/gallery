@@ -45,7 +45,7 @@ struct ContentView: View {
             let camera = SceneCamera.makeOverviewCamera()
             content.add(camera)
             orbitController.attach(camera: camera, viewportSize: viewportSize)
-            photoInteractionController.attach(camera: camera)
+            photoInteractionController.attach(camera: camera, viewportSize: viewportSize)
 
             let room = await loader.load(.room)
             
@@ -71,6 +71,7 @@ struct ContentView: View {
         } update: { _ in
             orbitController.updateViewport(viewportSize)
             albumController.updateViewport(viewportSize)
+            photoInteractionController.updateViewport(viewportSize)
         }
         .simultaneousGesture(
             TapGesture()
@@ -470,7 +471,7 @@ struct ContentView: View {
                    !isDraggingPhotoCardFromBack {
                     let canvasHeight = viewportSize.height * photoInteractionController.annotationCanvasHeightFraction
                     PhotoAnnotationCanvas(drawingData: $photoDrawingData)
-                        .frame(width: canvasHeight * 0.54 / 0.69, height: canvasHeight)
+                        .frame(width: canvasHeight * photoInteractionController.photoAspectRatio, height: canvasHeight)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -515,7 +516,7 @@ struct ContentView: View {
 
     private func photoPageRect(in viewportSize: CGSize) -> CGRect {
         let pageHeight = viewportSize.height * photoInteractionController.annotationCanvasHeightFraction
-        let pageWidth = pageHeight * 0.54 / 0.69
+        let pageWidth = pageHeight * photoInteractionController.photoAspectRatio
         return CGRect(
             x: (viewportSize.width - pageWidth) / 2,
             y: (viewportSize.height - pageHeight) / 2,
