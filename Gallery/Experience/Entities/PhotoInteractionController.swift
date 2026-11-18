@@ -1,4 +1,5 @@
 import Observation
+import CoreMotion
 import RealityKit
 import simd
 import UIKit
@@ -16,6 +17,7 @@ final class PhotoInteractionController {
 
     @ObservationIgnored private weak var camera: Entity?
     @ObservationIgnored private var card: Entity?
+    @ObservationIgnored private var motionPivot: Entity?
     @ObservationIgnored private var cardContent: Entity?
     @ObservationIgnored private var cardBody: ModelEntity?
     @ObservationIgnored private var frontSurface: ModelEntity?
@@ -32,6 +34,13 @@ final class PhotoInteractionController {
     @ObservationIgnored private var imageTask: Task<Void, Never>?
     @ObservationIgnored private let thumbnails = PhotoThumbnailCache()
     @ObservationIgnored private var presentationID = UUID()
+    @ObservationIgnored private let motionManager = CMMotionManager()
+    @ObservationIgnored private var motionReferenceAttitude: CMAttitude?
+    @ObservationIgnored private var motionYaw: Float = 0
+    @ObservationIgnored private var motionPitch: Float = 0
+    @ObservationIgnored private var dragYaw: Float = 0
+    @ObservationIgnored private var dragPitch: Float = 0
+    @ObservationIgnored private var motionUpdateTask: Task<Void, Never>?
 
     var isOpen: Bool { selectedPhotoID != nil }
 
@@ -67,6 +76,11 @@ final class PhotoInteractionController {
         photoLoadFailed = false
         rotation = 0
         pitch = 0
+        dragYaw = 0
+        dragPitch = 0
+        motionYaw = 0
+        motionPitch = 0
+        startMotionTracking()
         photoAspectRatio = 0.54 / 0.69
         cardWidth = 0.54
         cardHeight = 0.69
@@ -76,9 +90,14 @@ final class PhotoInteractionController {
         let height: Float = 0.69
         let root = Entity()
         root.name = "SelectedPhotoCard"
+        let motionPivot = Entity()
+        motionPivot.name = "PhotoCardMotionPivot"
+        root.addChild(motionPivot)
+        self.motionPivot = motionPivot
+
         let content = Entity()
         content.name = "PhotoCardContent"
-        root.addChild(content)
+        motionPivot.addChild(content)
         cardContent = content
 
         let body = ModelEntity(
@@ -158,7 +177,7 @@ final class PhotoInteractionController {
     }
 
     func updateDrag(translation: CGSize, viewportSize: CGSize) {
-        guard isOpen, !isTransitioning, let card else { return }
+        guard isOpen, !isTransitioning else { return }
 
         // Keep the card anchored at its presentation point. Drag rotates the
         // card around its own center on both local axes, like a floating card.
@@ -168,9 +187,9 @@ final class PhotoInteractionController {
         let pitchDelta = Float(translation.height / height) * 2 * .pi
         rotation = dragStartRotation + yaw
         pitch = min(max(dragStartPitch + pitchDelta, -.pi / 2), .pi / 2)
-        let yawRotation = simd_quatf(angle: rotation, axis: [0, 1, 0])
-        let pitchRotation = simd_quatf(angle: pitch, axis: [1, 0, 0])
-        card.orientation = yawRotation * pitchRotation
+        dragYaw = dragStartRotation + yaw
+        dragPitch = min(max(dragStartPitch + pitchDelta, -.pi / 2), .pi / 2)
+        applyDragOrientation()
     }
 
     func endDrag() {
@@ -187,6 +206,7 @@ final class PhotoInteractionController {
     func close() {
         imageTask?.cancel()
         imageTask = nil
+        stopMotionTracking()
         presentationID = UUID()
         guard let card else {
             resetState()
@@ -199,6 +219,7 @@ final class PhotoInteractionController {
             guard let self else { return }
             card?.removeFromParent()
             self.card = nil
+            self.motionPivot = nil
             self.cardContent = nil
             self.cardBody = nil
             self.frontSurface = nil
@@ -225,9 +246,73 @@ final class PhotoInteractionController {
             guard let self, self.card === card else { return }
             self.rotation = targetAngle
             self.pitch = 0
+            self.dragYaw = targetAngle
+            self.dragPitch = 0
+            self.motionReferenceAttitude = nil
+            self.motionYaw = 0
+            self.motionPitch = 0
+            self.motionPivot?.orientation = simd_quatf()
             self.isBackVisible = toBack
             self.isTransitioning = false
+            self.applyDragOrientation()
         }
+    }
+
+    private func startMotionTracking() {
+        guard motionManager.isDeviceMotionAvailable else { return }
+        stopMotionTracking()
+        motionManager.deviceMotionUpdateInterval = GalleryConfig.motionUpdateInterval
+        motionManager.startDeviceMotionUpdates(using: .xArbitraryZVertical)
+        motionReferenceAttitude = nil
+        motionYaw = 0
+        motionPitch = 0
+        motionUpdateTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.isOpen, !self.isTransitioning,
+                      !self.isBackVisible,
+                      let attitude = self.motionManager.deviceMotion?.attitude else {
+                    try? await Task.sleep(for: .milliseconds(40))
+                    continue
+                }
+
+                if self.motionReferenceAttitude == nil {
+                    self.motionReferenceAttitude = attitude.copy() as? CMAttitude
+                } else if let reference = self.motionReferenceAttitude {
+                    let relative = attitude.copy() as! CMAttitude
+                    relative.multiply(byInverseOf: reference)
+                    // A small, bounded response gives a subtle parallax tilt
+                    // without changing the card's anchored position.
+                    self.motionYaw = min(max(Float(relative.yaw) * 0.55, -0.48), 0.48)
+                    self.motionPitch = min(max(Float(relative.pitch) * 0.55, -0.48), 0.48)
+                    self.applyMotionOrientation()
+                }
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+        }
+    }
+
+    private func stopMotionTracking() {
+        motionUpdateTask?.cancel()
+        motionUpdateTask = nil
+        motionManager.stopDeviceMotionUpdates()
+        motionReferenceAttitude = nil
+        motionYaw = 0
+        motionPitch = 0
+    }
+
+    private func applyDragOrientation() {
+        guard let card else { return }
+        rotation = dragYaw
+        pitch = dragPitch
+        let yawRotation = simd_quatf(angle: dragYaw, axis: [0, 1, 0])
+        let pitchRotation = simd_quatf(angle: dragPitch, axis: [1, 0, 0])
+        card.orientation = yawRotation * pitchRotation
+    }
+
+    private func applyMotionOrientation() {
+        let motionYawRotation = simd_quatf(angle: motionYaw, axis: [0, 1, 0])
+        let motionPitchRotation = simd_quatf(angle: motionPitch, axis: [1, 0, 0])
+        motionPivot?.orientation = motionYawRotation * motionPitchRotation
     }
 
     private func apply(_ image: UIImage, for token: UUID) {
@@ -279,6 +364,7 @@ final class PhotoInteractionController {
     }
 
     private func resetState() {
+        stopMotionTracking()
         selectedPhotoID = nil
         isBackVisible = false
         isTransitioning = false
@@ -288,7 +374,11 @@ final class PhotoInteractionController {
         cardWidth = 0.54
         cardHeight = 0.69
         contentFitScale = 1
+        motionPivot?.orientation = simd_quatf()
+        motionPivot = nil
         rotation = 0
         pitch = 0
+        dragYaw = 0
+        dragPitch = 0
     }
 }
