@@ -309,6 +309,25 @@ final class AlbumAnimationController {
         readingCenter = [hingeX, hinge.y, 0]
         readingWidth = max(width * 2 + 0.04, GalleryConfig.albumCoverWidth * 2)
 
+        // The imported animated Capa opens behind the left page. Add a fixed
+        // matching backing on the right so that side also has a visible cover
+        // rim, without making the pages or the back panel participate in the
+        // cover hinge animation.
+        let rightCoverBorder = max(width * 0.055, 0.004)
+        let rightCoverVerticalBorder = max(height * 0.014, 0.003)
+        let rightCoverDepth: Float = 0.002
+        let rightCover = ModelEntity(
+            mesh: .generateBox(size: [width + rightCoverBorder, height + rightCoverVerticalBorder, rightCoverDepth]),
+            materials: [UnlitMaterial(color: .black)]
+        )
+        rightCover.name = "FixedRightCoverBacking"
+        rightCover.position = [
+            hingeX + width / 2 + rightCoverBorder / 2,
+            validBounds?.center.y ?? 0,
+            interiorTop - rightCoverDepth / 2 - 0.001
+        ]
+        paperRoot.addChild(rightCover)
+
         for index in 0..<3 {
             let pivot = Entity()
             pivot.name = ["LeftPageHinge", "RightPageHinge", "TurningPageHinge"][index]
