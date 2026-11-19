@@ -137,14 +137,19 @@ struct BlenderAssetLoader {
     }
 
     private func configureDrawerInteraction(in root: Entity) {
-        guard let drawer = findEntity(named: "Gaveta_Cima", in: root) else {
-            print("Drawer interaction target 'Gaveta_Cima' was not found in the Reality scene")
-            return
-        }
+        var configuredDrawers = 0
+        for drawerName in ScenarioDrawer.allCases.map(\.rawValue) {
+            guard let drawer = findEntity(named: drawerName, in: root) else {
+                print("Drawer interaction target '\(drawerName)' was not found in the Reality scene")
+                continue
+            }
 
-        drawer.generateCollisionShapes(recursive: true)
-        drawer.components.set(InputTargetComponent())
-        print("Configured drawer tap target: \(drawer.name)")
+            drawer.generateCollisionShapes(recursive: true)
+            drawer.components.set(InputTargetComponent())
+            configuredDrawers += 1
+            print("Configured drawer tap target: \(drawer.name)")
+        }
+        print("Configured drawer tap targets: \(configuredDrawers)/\(ScenarioDrawer.allCases.count)")
     }
 
     private func configureDeskInteraction(in root: Entity) {

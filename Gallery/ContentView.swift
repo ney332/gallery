@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var windowInteractionController = WindowInteractionController()
     @GestureState private var isPressingWindow = false
     @GestureState private var isPageGestureActive = false
+    @GestureState private var isDrawerDragGestureActive = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var isDragging = false
     @State private var isDraggingPhotoCard = false
@@ -96,6 +97,26 @@ struct ContentView: View {
                     )
                 }
                 .onEnded { _ in windowInteractionController.endDrag() }
+        )
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 4, coordinateSpace: .local)
+                .targetedToAnyEntity()
+                .updating($isDrawerDragGestureActive) { value, state, _ in
+                    state = drawerAncestor(from: value.entity) != nil
+                }
+                .onChanged { value in
+                    guard let drawer = drawerAncestor(from: value.entity),
+                          !boxInteractionController.isActive else { return }
+                    scenarioAnimationController.dragDrawer(
+                        named: drawer.name,
+                        verticalTranslation: value.translation.height,
+                        viewportHeight: viewportSize.height
+                    )
+                }
+                .onEnded { value in
+                    guard let drawer = drawerAncestor(from: value.entity) else { return }
+                    scenarioAnimationController.endDrawerDrag(named: drawer.name)
+                }
         )
         .simultaneousGesture(
             DragGesture(minimumDistance: 8, coordinateSpace: .local)
@@ -270,7 +291,7 @@ struct ContentView: View {
                 isLoadingAnnotation = false
             }
             return
-        }
+        } 
         if boxInteractionController.canAccessAlbums,
            let id = albumController.albumID(containing: entity) {
             albumController.select(id)
@@ -291,8 +312,7 @@ struct ContentView: View {
             return
         }
         if let drawer = drawerAncestor(from: entity) {
-            guard scenarioAnimationController.toggleTopDrawer() else { return }
-            orbitController.toggleFocus(on: drawer, lookingFromFront: true, pitchDegrees: 32, minimumRadius: 0.75)
+            orbitController.toggleFocus(on: drawer, lookingFromFront: true, pitchDegrees: 32, minimumRadius: 2.1)
             return
         }
         if let desk = deskAncestor(from: entity) {
@@ -326,7 +346,8 @@ struct ContentView: View {
             }
             return
         }
-        guard !boxInteractionController.isActive,
+        guard !isDrawerDragGestureActive,
+              !boxInteractionController.isActive,
               !isPressingWindow, !windowInteractionController.isDragging else { return }
         if !isDragging {
             isDragging = true
@@ -613,7 +634,7 @@ struct ContentView: View {
     private func drawerAncestor(from entity: Entity) -> Entity? {
         var current: Entity? = entity
         while let candidate = current {
-            if candidate.name.compare("Gaveta_Meio", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+            if ScenarioDrawer.matches(candidate.name) {
                 return candidate
             }
             current = candidate.parent
