@@ -23,6 +23,8 @@ final class PhotoInteractionController {
     @ObservationIgnored private var frontSurface: ModelEntity?
     @ObservationIgnored private var backSurface: ModelEntity?
     @ObservationIgnored private var cardHome = Transform()
+    @ObservationIgnored private var pendingOpenDestination: Transform?
+    @ObservationIgnored private var hasPresentedPhoto = false
     @ObservationIgnored private var viewportSize = CGSize(width: 1, height: 1)
     @ObservationIgnored private var cardWidth: Float = 0.54
     @ObservationIgnored private var cardHeight: Float = 0.69
@@ -131,9 +133,19 @@ final class PhotoInteractionController {
         let worldCenter = source.visualBounds(relativeTo: nil).center
         let cameraSpace = simd_inverse(camera.transformMatrix(relativeTo: nil))
             * SIMD4<Float>(worldCenter.x, worldCenter.y, worldCenter.z, 1)
-        let startPosition = SIMD3<Float>(cameraSpace.x, cameraSpace.y, cameraSpace.z)
+        var startPosition = SIMD3<Float>(cameraSpace.x, cameraSpace.y, cameraSpace.z)
+        // The printed photo occupies an inset rectangle in the page texture
+        // (520×610 in a 600×780 layout). Match that visible rectangle so the
+        // real photo appears to lift from the page instead of popping in small.
+        let pageBounds = source.visualBounds(relativeTo: camera)
+        let photoWidthOnPage = pageBounds.extents.x * (520.0 / 600.0)
+        let photoHeightOnPage = pageBounds.extents.y * (610.0 / 780.0)
+        let extractionScale = min(photoWidthOnPage / width, photoHeightOnPage / height)
+        root.scale = SIMD3(repeating: max(extractionScale, 0.001))
+        // Move it just off the paper toward the camera to prevent z-fighting.
+        startPosition.z += 0.004
         root.position = startPosition
-        root.scale = SIMD3(repeating: 0.14)
+        root.isEnabled = false
         camera.addChild(root)
         card = root
 
@@ -146,7 +158,8 @@ final class PhotoInteractionController {
         let foregroundDepth = max(GalleryConfig.albumViewingDistance - 0.17, 0.32)
         destination.translation = [0, 0, -foregroundDepth]
         destination.scale = SIMD3(repeating: foregroundDepth / previousCardDepth)
-        root.move(to: destination, relativeTo: camera, duration: 0.48, timingFunction: .easeInOut)
+        pendingOpenDestination = destination
+        hasPresentedPhoto = false
 
         let token = UUID()
         presentationID = token
@@ -329,6 +342,15 @@ final class PhotoInteractionController {
         var material = UnlitMaterial()
         material.color = .init(tint: .white, texture: .init(texture))
         frontSurface.model?.materials = [material]
+        guard !hasPresentedPhoto, let card, let camera,
+              let destination = pendingOpenDestination else { return }
+        // Do not show the default portrait card while PhotoKit is still
+        // resolving the image orientation. Start the extraction only after
+        // the real photo and its matching geometry are ready.
+        hasPresentedPhoto = true
+        pendingOpenDestination = nil
+        card.isEnabled = true
+        card.move(to: destination, relativeTo: camera, duration: 0.48, timingFunction: .easeInOut)
     }
 
     private func updateCardGeometry(for image: UIImage) {
@@ -366,6 +388,8 @@ final class PhotoInteractionController {
     private func resetState() {
         stopMotionTracking()
         selectedPhotoID = nil
+        pendingOpenDestination = nil
+        hasPresentedPhoto = false
         isBackVisible = false
         isTransitioning = false
         isLoadingPhoto = false
