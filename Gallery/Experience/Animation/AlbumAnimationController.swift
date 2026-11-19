@@ -163,6 +163,35 @@ final class AlbumAnimationController {
         entity.transform = destination
     }
 
+    /// Plays consecutive transform legs as one RealityKit playback. Keeping a
+    /// single playback avoids task/event handoffs between legs, which can show
+    /// up as brief pauses when the renderer is busy.
+    func moveSequence(_ entity: Entity, through poses: [Transform], relativeTo parent: Entity,
+                      durations: [TimeInterval]) async {
+        guard poses.count == durations.count, !poses.isEmpty else { return }
+        var start = entity.transform
+        var resources: [AnimationResource] = []
+        resources.reserveCapacity(poses.count)
+        for (pose, duration) in zip(poses, durations) {
+            let animation = FromToByAnimation<Transform>(
+                from: start,
+                to: pose,
+                duration: duration,
+                timing: .linear,
+                bindTarget: .transform
+            )
+            guard let resource = try? AnimationResource.generate(with: animation) else { return }
+            resources.append(resource)
+            start = pose
+        }
+        guard let sequence = try? AnimationResource.sequence(with: resources) else { return }
+        let playback = entity.playAnimation(sequence)
+        await waitForPlayback(playback, on: entity, duration: durations.reduce(0, +))
+        guard !Task.isCancelled else { return }
+        entity.stopAllAnimations(recursive: false)
+        entity.transform = poses[poses.count - 1]
+    }
+
     /// A wall-clock sleep could hide the sheet before RealityKit finished
     /// drawing it under load. Complete the turn on the renderer's event.
     private func waitForPlayback(_ playback: AnimationPlaybackController, on entity: Entity, duration: TimeInterval) async {
@@ -179,7 +208,10 @@ final class AlbumAnimationController {
                     Task { @MainActor in waiter.finish() }
                 }
                 waiter.timeout = Task {
-                    do { try await Task.sleep(for: .seconds(duration + 3)) } catch { return }
+                    // PlaybackCompleted normally wins. Keep a short safety
+                    // margin instead of allowing a missed event to stall the
+                    // interaction for several seconds.
+                    do { try await Task.sleep(for: .seconds(duration + 0.15)) } catch { return }
                     waiter.finish()
                 }
             }

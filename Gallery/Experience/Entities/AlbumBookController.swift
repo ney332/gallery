@@ -353,23 +353,18 @@ final class AlbumBookController {
             guard !Task.isCancelled, self.readingSessionID == session else { return }
             book.stopAllAnimations(recursive: true)
             rig.resetTurn(materials: self.pageCache.materials(at: self.pageIndex))
+            self.pageCache.setAnimationActive(true)
             rig.maskLeftPageForClosing()
             if rig.root.isEnabled { await rig.animateCover(open: false) }
             guard !Task.isCancelled, self.readingSessionID == session else { return }
-            self.pageCache.clear()
-            self.cachedAlbum = nil
             rig.root.isEnabled = false
             self.travelModel?.isEnabled = true
             self.box?.isEnabled = self.boxWasEnabled
             if let source = self.sourceAlbum {
                 if self.hasClearedBox {
-                    if let approach = self.approachPose {
-                        await rig.move(book, to: approach, relativeTo: camera, duration: 0.2)
-                        guard !Task.isCancelled, self.readingSessionID == session else { return }
-                    }
-                    if let extraction = self.extractionPose {
-                        await rig.move(book, to: extraction, relativeTo: camera,
-                                       duration: GalleryConfig.albumTravelDuration)
+                    if let approach = self.approachPose, let extraction = self.extractionPose {
+                        await rig.moveSequence(book, through: [approach, extraction], relativeTo: camera,
+                                               durations: [0.2, GalleryConfig.albumTravelDuration])
                         guard !Task.isCancelled, self.readingSessionID == session else { return }
                     }
                 }
@@ -386,6 +381,8 @@ final class AlbumBookController {
                 }
             }
             guard !Task.isCancelled, self.readingSessionID == session else { return }
+            self.pageCache.clear()
+            self.cachedAlbum = nil
             self.transitionTask = nil
             self.removeBook()
         }
@@ -477,6 +474,9 @@ final class AlbumBookController {
         readingSessionID = UUID()
         let session = readingSessionID
         prepareAlbum(album)
+        // Defer any photo-to-texture work until the album has reached the
+        // reader, so texture uploads cannot compete with the flight animation.
+        pageCache.setAnimationActive(true)
         pageIndex = min(1, pages.count)
         boxWasEnabled = box.isEnabled
         sourceAlbum = source
@@ -516,15 +516,15 @@ final class AlbumBookController {
                 self.hasClearedBox = true
                 book.setParent(camera, preservingWorldTransform: true)
             }
-            await rig.move(book, to: self.approachPose ?? destination, relativeTo: camera,
-                           duration: GalleryConfig.albumTravelDuration)
-            guard !Task.isCancelled, self.readingSessionID == session else { return }
-            await rig.move(book, to: destination, relativeTo: camera, duration: 0.2)
+            await rig.moveSequence(book, through: [self.approachPose ?? destination, destination],
+                                   relativeTo: camera,
+                                   durations: [GalleryConfig.albumTravelDuration, 0.2])
             guard !Task.isCancelled, self.readingSessionID == session else { return }
             // Keep the box and remaining albums visible behind the book.
             travel.isEnabled = false
             rig.root.isEnabled = true
             if self.pageIndex > 0 {
+                self.pageCache.setAnimationActive(false)
                 self.isLoadingPage = self.pageCache.materials(at: self.pageIndex) == nil
                 let materials = await self.pageCache.preparedMaterials(at: self.pageIndex)
                 guard !Task.isCancelled, self.readingSessionID == session else { return }
