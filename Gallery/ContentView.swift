@@ -190,9 +190,9 @@ struct ContentView: View {
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
                 .padding(.horizontal, 24)
                 .padding(.top, 52)
-            } else if orbitController.isShelfFocused {
+            } else if orbitController.isFocused {
                 Button {
-                    orbitController.returnFromShelf()
+                    orbitController.returnFromFocus()
                 } label: {
                     Label("voltar", systemImage: "arrow.left")//voltar ao quarto
                         .padding(12)
@@ -312,7 +312,7 @@ struct ContentView: View {
             return
         }
         if let drawer = drawerAncestor(from: entity) {
-            orbitController.toggleFocus(on: drawer, lookingFromFront: true, pitchDegrees: 32, minimumRadius: 2.1)
+            orbitController.toggleFocus(on: drawer, lookingFromFront: true, pitchDegrees: 45, minimumRadius: 2.1)
             return
         }
         if let desk = deskAncestor(from: entity) {

@@ -33,7 +33,9 @@ final class OverviewOrbitController {
     private var focusReadyAt = Date.distantPast
 
     private(set) var isShelfFocused = false
+    private var isCameraFixedForFocus = false
     var isShelfFocusReady: Bool { isShelfFocused && Date() >= focusReadyAt }
+    var isFocused: Bool { savedOrbitState != nil }
 
     private struct OrbitState {
         let target: SIMD3<Float>
@@ -67,6 +69,7 @@ final class OverviewOrbitController {
         }
         focusedEntity = entity
         isShelfFocused = entity.name.compare("Estante", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        isCameraFixedForFocus = isShelfFocused || ScenarioDrawer.matches(entity.name)
         focusReadyAt = Date().addingTimeInterval(1.2)
 
         let bounds = entity.visualBounds(relativeTo: nil)
@@ -89,7 +92,9 @@ final class OverviewOrbitController {
         target = focusCenter
         radius = simd_distance(position, target)
         yaw = atan2(position.x - target.x, position.z - target.z)
-        yawCenter = yaw
+        // Keep yawCenter anchored to the overview camera's starting heading.
+        // Re-centering on each focused object would let the camera's allowed
+        // horizontal range drift around the room as the user taps objects.
         pitch = atan2(
             position.y - target.y,
             simd_length(SIMD2(position.x - target.x, position.z - target.z))
@@ -112,6 +117,11 @@ final class OverviewOrbitController {
         restorePreviousView()
     }
 
+    func returnFromFocus() {
+        guard savedOrbitState != nil else { return }
+        restorePreviousView()
+    }
+
     private func restorePreviousView() {
         guard let savedOrbitState else { return }
         target = savedOrbitState.target
@@ -122,6 +132,7 @@ final class OverviewOrbitController {
         self.savedOrbitState = nil
         focusedEntity = nil
         isShelfFocused = false
+        isCameraFixedForFocus = false
 
         let position = keepCameraOutsideWallShell(requestedCameraPosition())
         moveCamera.move(to: position, lookingAt: position + cameraForward())
@@ -132,17 +143,21 @@ final class OverviewOrbitController {
     }
 
     func beginDrag() {
+        guard !isCameraFixedForFocus else { return }
         yawAtDragStart = yaw
         pitchAtDragStart = pitch
     }
 
     func updateDrag(translation: CGSize) {
+        guard !isCameraFixedForFocus else { return }
         let sensitivity = viewportSize.width > 0
             ? 2 * Float.pi / Float(viewportSize.width)
             : 0.01
 
         let yawOffset = Float(translation.width) * sensitivity
-        let maximumYawOffset: Float = .pi / 2
+        // Keep the horizontal orbit within 90° total, centered on the
+        // current framing, so the camera cannot swing behind the room's sides.
+        let maximumYawOffset: Float = .pi / 4
         yaw = min(
             max(yawAtDragStart + yawOffset, yawCenter - maximumYawOffset),
             yawCenter + maximumYawOffset
