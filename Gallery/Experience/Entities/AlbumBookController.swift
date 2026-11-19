@@ -53,7 +53,6 @@ final class AlbumBookController {
     @ObservationIgnored private var boxBounds: BoundingBox?
     @ObservationIgnored private var failedTurnTarget: Int?
     @ObservationIgnored private var pages: [PhotoPage] = []
-    @ObservationIgnored private var rememberedPages: [String: Int] = [:]
     @ObservationIgnored private var rememberedSelections: [String: String] = [:]
     @ObservationIgnored private var viewport = CGSize.zero
 
@@ -304,7 +303,6 @@ final class AlbumBookController {
             }
             guard !Task.isCancelled, self.readingSessionID == session, self.turnID == token else { return }
             self.pageIndex = target
-            self.rememberPage()
             self.phase = .reading
             self.turnTask = nil
             self.outgoingMaterials = nil
@@ -329,24 +327,37 @@ final class AlbumBookController {
 
     func closeBook() {
         guard isReading, phase != .returning, let book, let camera, let rig = animationRig else { return }
-        rememberPage()
-        transitionTask?.cancel()
-        turnTask?.cancel()
-        pageTask?.cancel()
+        let interruptedTransition = transitionTask
+        let interruptedTurn = turnTask
+        let interruptedPageLoad = pageTask
+        interruptedTransition?.cancel()
+        interruptedTurn?.cancel()
+        interruptedPageLoad?.cancel()
+        transitionTask = nil
+        turnTask = nil
+        pageTask = nil
         readingSessionID = UUID()
         let session = readingSessionID
         turnID = UUID()
         phase = .returning
-        book.stopAllAnimations(recursive: true)
-        rig.resetTurn(materials: pageCache.materials(at: pageIndex))
-        pageCache.clear()
-        cachedAlbum = nil
         isLoadingPage = false
         hasUnavailablePhotos = false
         transitionTask = Task { [weak self] in
             guard let self else { return }
+            // Let cancellation handlers stop RealityKit playback before
+            // restoring the committed spread. Resetting concurrently with an
+            // interrupted page animation can leave a sheet crossing the cover.
+            if let interruptedTurn { await interruptedTurn.value }
+            if let interruptedTransition { await interruptedTransition.value }
+            if let interruptedPageLoad { await interruptedPageLoad.value }
+            guard !Task.isCancelled, self.readingSessionID == session else { return }
+            book.stopAllAnimations(recursive: true)
+            rig.resetTurn(materials: self.pageCache.materials(at: self.pageIndex))
+            rig.maskLeftPageForClosing()
             if rig.root.isEnabled { await rig.animateCover(open: false) }
             guard !Task.isCancelled, self.readingSessionID == session else { return }
+            self.pageCache.clear()
+            self.cachedAlbum = nil
             rig.root.isEnabled = false
             self.travelModel?.isEnabled = true
             self.box?.isEnabled = self.boxWasEnabled
@@ -381,7 +392,6 @@ final class AlbumBookController {
     }
 
     private func removeBook() {
-        rememberPage()
         turnTask?.cancel()
         turnTask = nil
         transitionTask?.cancel()
@@ -457,8 +467,7 @@ final class AlbumBookController {
             }
             self.applyPreparedPage(index)
         }
-        let initialPage = min(rememberedPages[album.id, default: 1], pages.count)
-        pageCache.keepWindow(around: max(1, initialPage), includeNeighbors: false)
+        pageCache.keepWindow(around: 1, includeNeighbors: false)
     }
 
     private func open(_ album: AlbumContent) {
@@ -468,7 +477,7 @@ final class AlbumBookController {
         readingSessionID = UUID()
         let session = readingSessionID
         prepareAlbum(album)
-        pageIndex = min(rememberedPages[album.id, default: 1], pages.count)
+        pageIndex = min(1, pages.count)
         boxWasEnabled = box.isEnabled
         sourceAlbum = source
         let rig = AlbumAnimationController(prototype: prototype)
@@ -594,10 +603,6 @@ final class AlbumBookController {
         pose.scale = closed.scale + (opened.scale - closed.scale) * amount
         pose.translation = closed.translation + (opened.translation - closed.translation) * amount
         book.transform = pose
-    }
-
-    private func rememberPage() {
-        if let album = activeAlbum { rememberedPages[album.id] = pageIndex }
     }
 
     private func loadPage() {

@@ -100,6 +100,13 @@ final class AlbumAnimationController {
         await move(leftPageHinge, to: destination, relativeTo: paperRoot, duration: duration)
     }
 
+    /// The left page is positioned above the open cover plane. Hide its whole
+    /// imported page hierarchy before the lid starts moving so neither the
+    /// photo quad nor the underlying mesh can render across the outside cover.
+    func maskLeftPageForClosing() {
+        leftPageHinge?.isEnabled = false
+    }
+
     /// Snapshot the outgoing face before asynchronous target photos arrive.
     func beginTurn(by direction: Int) {
         outgoingShowsLeftPage = showsLeftPage
@@ -140,8 +147,10 @@ final class AlbumAnimationController {
 
     func resetTurn(materials: AlbumPageMaterials?) {
         turningLeaf?.stopAllAnimations(recursive: false)
+        turningLeaf?.orientation = simd_quatf(angle: 0, axis: [0, 1, 0])
         turningLeaf?.isEnabled = false
         turnDirection = 0
+        outgoingShowsLeftPage = false
         if let materials { setPhotos(materials) } else { applyMaterials() }
     }
 
