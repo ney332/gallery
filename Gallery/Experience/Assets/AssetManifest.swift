@@ -28,9 +28,10 @@ enum AssetManifest {
             animationNames: [:]
         ),
         .room: AssetDefinition(
-            fileName: "world",
+            // Runtime scene exported from the Reality Composer project.
+            fileName: "Gallery",
             fileExtension: "reality",
-            version: 2,
+            version: 3,
             logicalEntityName: "BaseScenario",
             animationNames: [:]
         ),

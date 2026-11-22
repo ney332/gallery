@@ -13,7 +13,8 @@ final class SceneLightingController {
     private weak var sceneRoot: Entity?
     private var exteriorLight: Entity?
     private var interiorLight: Entity?
-    private var lampLight: Entity?
+    private var lampLights: [Entity] = []
+    private var lampIntensities: [ObjectIdentifier: Float] = [:]
 
     private var preset: SceneLightingPreset = .afternoon
     private var isExteriorEnabled = true
@@ -40,21 +41,15 @@ final class SceneLightingController {
         root.addChild(interior)
         interiorLight = interior
 
-        let lamp = Entity()
-        lamp.name = "CodeBedsideLampLight"
-        if let shade = findEntity(named: "Topo_do_Abajur", in: root) {
-            let shadeBounds = shade.visualBounds(relativeTo: root)
-            lamp.position = shadeBounds.center - SIMD3<Float>(0, shadeBounds.extents.y * 0.65, 0)
-        }
-        var lampComponent = PointLightComponent()
-        lampComponent.attenuationRadius = 2.0
-        lamp.components.set(lampComponent)
-        lamp.isEnabled = false
-        root.addChild(lamp)
-        lampLight = lamp
+        lampLights = findLampLights(in: root)
+        lampIntensities = Dictionary(uniqueKeysWithValues: lampLights.compactMap { entity in
+            guard let light = entity.components[PointLightComponent.self] else { return nil }
+            return (ObjectIdentifier(entity), light.intensity)
+        })
+        setLampEnabled(false)
 
         applyPreset()
-        print("Installed code lighting: exterior, interior, and bedside lamp")
+        print("Installed code lighting: exterior and interior; found \(lampLights.count) imported lamp point lights")
     }
 
     func setPreset(_ preset: SceneLightingPreset) {
@@ -74,7 +69,12 @@ final class SceneLightingController {
 
     func setLampEnabled(_ enabled: Bool) {
         isLampEnabled = enabled
-        lampLight?.isEnabled = enabled
+        for entity in lampLights {
+            guard var light = entity.components[PointLightComponent.self] else { continue }
+            let originalIntensity = lampIntensities[ObjectIdentifier(entity)] ?? light.intensity
+            light.intensity = enabled ? originalIntensity : 0
+            entity.components.set(light)
+        }
     }
 
     func toggleLamp() {
@@ -119,12 +119,21 @@ final class SceneLightingController {
             interiorLight?.isEnabled = isInteriorEnabled
         }
 
-        if var light = lampLight?.components[PointLightComponent.self] {
-            light.intensity = 420
-            light.color = UIColor(red: 1.0, green: 0.68, blue: 0.38, alpha: 1)
-            lampLight?.components.set(light)
-            lampLight?.isEnabled = isLampEnabled
+    }
+
+    private func findLampLights(in root: Entity) -> [Entity] {
+        var matches: [Entity] = []
+        func visit(_ entity: Entity, insideLamp: Bool) {
+            let isLampPart = insideLamp || ["Abajur", "Topo_do_Abajur"].contains {
+                entity.name.compare($0, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            }
+            if isLampPart, let light = entity.components[PointLightComponent.self] {
+                matches.append(entity)
+            }
+            for child in entity.children { visit(child, insideLamp: isLampPart) }
         }
+        visit(root, insideLamp: false)
+        return matches
     }
 
     private func findEntity(named name: String, in root: Entity) -> Entity? {
