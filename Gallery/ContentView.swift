@@ -185,7 +185,6 @@ struct ContentView: View {
             } else if boxInteractionController.isActive {
                 HStack(spacing: 16) {
                     Button {
-                        albumController.clearAlbums()
                         boxInteractionController.returnToShelf()
                     } label: {
                         Label("navigation.back.to.shelf", systemImage: "arrow.uturn.backward")
@@ -276,8 +275,13 @@ struct ContentView: View {
     }
 
     private func refreshAlbums() {
+        if boxInteractionController.phase == .returning {
+            // Keep the album models visible inside the moving box until its
+            // return animation completes; disable their hit targets meanwhile.
+            albumController.setInteractionEnabled(false)
+            return
+        }
         guard boxInteractionController.isActive,
-              boxInteractionController.phase != .returning,
               let box = boxInteractionController.selectedBox,
               let bounds = boxInteractionController.selectedBoxBounds,
               let slot = BoxInteractionController.boxNames.firstIndex(of: box.name) else {
