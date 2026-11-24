@@ -1,60 +1,112 @@
 import RealityKit
 import UIKit
 
-enum SceneLightingPreset {
+enum SceneLightingPreset: Equatable {
     case morning
     case afternoon
     case night
+
+    static func forCurrentTime(date: Date = Date(), calendar: Calendar = .current) -> Self {
+        let hour = calendar.component(.hour, from: date)
+        switch hour {
+        case 6..<12: return .morning
+        case 12..<18: return .afternoon
+        default: return .night
+        }
+    }
 }
 
-/// Owns the room's exterior, interior, and bedside-lamp lights.
+/// Owns the room's exterior, ceiling/interior, and bedside-lamp lights.
 @MainActor
 final class SceneLightingController {
     private weak var sceneRoot: Entity?
     private var exteriorLight: Entity?
     private var interiorLight: Entity?
-    private var lampLights: [Entity] = []
-    private var lampIntensities: [ObjectIdentifier: Float] = [:]
+    private var lampLight: Entity?
 
-    private var preset: SceneLightingPreset = .afternoon
+    private var preset: SceneLightingPreset = .forCurrentTime()
     private var isExteriorEnabled = true
     private var isInteriorEnabled = true
     private var isLampEnabled = false
 
-    func attach(to root: Entity, preset: SceneLightingPreset = .afternoon) {
+    func attach(to root: Entity, preset: SceneLightingPreset = .forCurrentTime()) {
         sceneRoot = root
         self.preset = preset
 
+        // Luz direcional externa que acompanha o período do dia.
         let exterior = Entity()
         exterior.name = "CodeExteriorLight"
-        exterior.orientation = simd_quatf(angle: -.pi / 4, axis: [1, 0, 0])
-        exterior.components.set(DirectionalLightComponent())
+        exterior.orientation = simd_quatf(angle: -.pi / 3, axis: [1, 0, 0])
+        let exteriorComponent = DirectionalLightComponent()
+        exterior.components.set([
+            exteriorComponent,
+            DirectionalLightComponent.Shadow()
+        ])
+        exterior.isEnabled = true
         root.addChild(exterior)
         exteriorLight = exterior
 
+        // Luz de teto / interior com sombra e foco angulado para criar volume.
         let interior = Entity()
         interior.name = "CodeInteriorLight"
-        interior.position = [0, 2.5, 0]
-        var interiorComponent = PointLightComponent()
-        interiorComponent.attenuationRadius = 4.5
-        interior.components.set(interiorComponent)
+        if let ceiling = findEntity(named: "Teto", in: root) {
+            let bounds = ceiling.visualBounds(relativeTo: root)
+            interior.position = SIMD3<Float>(bounds.center.x, bounds.min.y - 0.12, bounds.center.z)
+        } else {
+            interior.position = [0, 2.5, 0]
+        }
+        // Inclina levemente o cone para projetar sombras laterais em móveis e paredes.
+        interior.orientation = simd_quatf(angle: -.pi / 6, axis: [0.6, 0, 0.8])
+        var interiorComponent = SpotLightComponent()
+        interiorComponent.innerAngleInDegrees = 38
+        interiorComponent.outerAngleInDegrees = 75
+        interiorComponent.attenuationRadius = 4.2
+        interior.components.set([
+            interiorComponent,
+            SpotLightComponent.Shadow()
+        ])
         root.addChild(interior)
         interiorLight = interior
 
-        lampLights = findLampLights(in: root)
-        lampIntensities = Dictionary(uniqueKeysWithValues: lampLights.compactMap { entity in
-            guard let light = entity.components[PointLightComponent.self] else { return nil }
-            return (ObjectIdentifier(entity), light.intensity)
-        })
-        setLampEnabled(false)
+        // Luz do abajur (ativada ao tocar no abajur).
+        let lamp = Entity()
+        lamp.name = "CodeBedsideLampLight"
+        if let shade = findEntity(named: "Topo_do_Abajur", in: root) {
+            let shadeBounds = shade.visualBounds(relativeTo: root)
+            // Place the emitter just inside the shade's lower opening.
+            lamp.position = SIMD3<Float>(
+                shadeBounds.center.x,
+                shadeBounds.min.y + shadeBounds.extents.y * 0.18,
+                shadeBounds.center.z
+            )
+        }
+        // SpotLight emits along local -Z; rotate it toward the tabletop (-Y).
+        lamp.orientation = simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
+        var lampComponent = SpotLightComponent()
+        lampComponent.innerAngleInDegrees = 45
+        lampComponent.outerAngleInDegrees = 85
+        lampComponent.attenuationRadius = 2.4
+        lamp.components.set([
+            lampComponent,
+            SpotLightComponent.Shadow()
+        ])
+        lamp.isEnabled = false
+        root.addChild(lamp)
+        lampLight = lamp
 
         applyPreset()
-        print("Installed code lighting: exterior and interior; found \(lampLights.count) imported lamp point lights")
+        print("Installed code lighting: exterior enabled, light shadows enabled")
     }
 
     func setPreset(_ preset: SceneLightingPreset) {
         self.preset = preset
         applyPreset()
+    }
+
+    func refreshForCurrentTime(date: Date = Date(), calendar: Calendar = .current) {
+        let currentPreset = SceneLightingPreset.forCurrentTime(date: date, calendar: calendar)
+        guard currentPreset != preset else { return }
+        setPreset(currentPreset)
     }
 
     func setExteriorEnabled(_ enabled: Bool) {
@@ -69,12 +121,7 @@ final class SceneLightingController {
 
     func setLampEnabled(_ enabled: Bool) {
         isLampEnabled = enabled
-        for entity in lampLights {
-            guard var light = entity.components[PointLightComponent.self] else { continue }
-            let originalIntensity = lampIntensities[ObjectIdentifier(entity)] ?? light.intensity
-            light.intensity = enabled ? originalIntensity : 0
-            entity.components.set(light)
-        }
+        lampLight?.isEnabled = enabled
     }
 
     func toggleLamp() {
@@ -89,20 +136,20 @@ final class SceneLightingController {
 
         switch preset {
         case .morning:
-            exteriorIntensity = 1_400
-            exteriorColor = UIColor(red: 1.0, green: 0.84, blue: 0.68, alpha: 1)
-            interiorIntensity = 190
-            interiorColor = UIColor(red: 1.0, green: 0.91, blue: 0.78, alpha: 1)
+            exteriorIntensity = 600
+            exteriorColor = UIColor(red: 1.0, green: 0.82, blue: 0.62, alpha: 1)
+            interiorIntensity = 4_200
+            interiorColor = UIColor(red: 1.0, green: 0.82, blue: 0.64, alpha: 1)
         case .afternoon:
-            exteriorIntensity = 1_800
-            exteriorColor = .white
-            interiorIntensity = 1200
-            interiorColor = .white
+            exteriorIntensity = 800
+            exteriorColor = UIColor(red: 0.92, green: 0.95, blue: 1.0, alpha: 1)
+            interiorIntensity = 5_500
+            interiorColor = UIColor(red: 1.0, green: 0.84, blue: 0.67, alpha: 1)
         case .night:
-            exteriorIntensity = 8
-            exteriorColor = UIColor(red: 0.25, green: 0.35, blue: 0.62, alpha: 1)
-            interiorIntensity = 1
-            interiorColor = UIColor(red: 0.45, green: 0.50, blue: 0.65, alpha: 1)
+            exteriorIntensity = 50
+            exteriorColor = UIColor(red: 0.22, green: 0.32, blue: 0.65, alpha: 1)
+            interiorIntensity = 1_400
+            interiorColor = UIColor(red: 1.0, green: 0.80, blue: 0.58, alpha: 1)
         }
 
         if var light = exteriorLight?.components[DirectionalLightComponent.self] {
@@ -112,28 +159,19 @@ final class SceneLightingController {
             exteriorLight?.isEnabled = isExteriorEnabled
         }
 
-        if var light = interiorLight?.components[PointLightComponent.self] {
+        if var light = interiorLight?.components[SpotLightComponent.self] {
             light.intensity = interiorIntensity
             light.color = interiorColor
             interiorLight?.components.set(light)
             interiorLight?.isEnabled = isInteriorEnabled
         }
 
-    }
-
-    private func findLampLights(in root: Entity) -> [Entity] {
-        var matches: [Entity] = []
-        func visit(_ entity: Entity, insideLamp: Bool) {
-            let isLampPart = insideLamp || ["Abajur", "Topo_do_Abajur"].contains {
-                entity.name.compare($0, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
-            }
-            if isLampPart, let light = entity.components[PointLightComponent.self] {
-                matches.append(entity)
-            }
-            for child in entity.children { visit(child, insideLamp: isLampPart) }
+        if var light = lampLight?.components[SpotLightComponent.self] {
+            light.intensity = 1_200
+            light.color = UIColor(red: 1.0, green: 0.76, blue: 0.52, alpha: 1)
+            lampLight?.components.set(light)
+            lampLight?.isEnabled = isLampEnabled
         }
-        visit(root, insideLamp: false)
-        return matches
     }
 
     private func findEntity(named name: String, in root: Entity) -> Entity? {

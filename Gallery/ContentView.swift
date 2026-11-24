@@ -1,6 +1,7 @@
 import RealityKit
 import PencilKit
 import SwiftUI
+import Combine
 
 struct ContentView: View {
     let libraryModel: GalleryLibraryModel
@@ -36,6 +37,9 @@ struct ContentView: View {
         }
             .ignoresSafeArea()
             .background(Color(red: 0.12, green: 0.10, blue: 0.09))
+            .onAppear {
+                AudioService.shared.startAmbientLoop()
+            }
     }
 
     private func scene(viewportSize: CGSize) -> some View {
@@ -57,8 +61,7 @@ struct ContentView: View {
             scenarioAnimationController.attach(to: room)
             
             windowInteractionController.attach(to: scenarioAnimationController.entity(for: .windowGlass))
-            //controler de luz no ambiente 
-            sceneLightingController.attach(to: room, preset: .afternoon)
+            sceneLightingController.attach(to: room)
             
             boxInteractionController.attach(to: room, camera: camera)
             
@@ -222,6 +225,10 @@ struct ContentView: View {
         }
         .overlay(alignment: .bottom) { photoMarkupToolbar }
         .task { await libraryModel.load() }
+        .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
+            guard scenePhase == .active else { return }
+            sceneLightingController.refreshForCurrentTime()
+        }
         .onChange(of: boxInteractionController.phase) { _, _ in refreshAlbums() }
         .onChange(of: boxInteractionController.canAccessAlbums) { _, _ in refreshAlbums() }
         .onChange(of: albumController.isPrepared) { _, _ in refreshAlbums() }
@@ -257,6 +264,7 @@ struct ContentView: View {
             photoInteractionController.close()
             albumController.clearAlbums()
             boxInteractionController.resetPresentation()
+            AudioService.shared.pauseAmbientLoop()
         }
     }
 
@@ -373,10 +381,17 @@ struct ContentView: View {
     }
 
     private func handleScenePhaseChange(_ phase: ScenePhase) {
-        guard phase != .active else { return }
-        windowInteractionController.endDrag()
-        albumController.cancelPageDrag()
-        if photoInteractionController.isOpen { closePhotoCard() }
+        if phase != .active {
+            windowInteractionController.endDrag()
+            albumController.cancelPageDrag()
+            boxInteractionController.endDrag()
+            AudioService.shared.stopAllContinuousSounds()
+            AudioService.shared.pauseAmbientLoop()
+            if photoInteractionController.isOpen { closePhotoCard() }
+        } else {
+            sceneLightingController.refreshForCurrentTime()
+            AudioService.shared.resumeAmbientLoop()
+        }
     }
 
     private func scheduleAnnotationSave() {

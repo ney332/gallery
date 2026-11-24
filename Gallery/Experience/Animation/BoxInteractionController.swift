@@ -4,7 +4,6 @@ import RealityKit
 import simd
 import UIKit
 
-/// Presents one of the nine shelf boxes and controls its tape and hinged flaps.
 @MainActor
 @Observable
 final class BoxInteractionController {
@@ -42,6 +41,7 @@ final class BoxInteractionController {
     private enum Side {
         case left, right
         var sign: Float { self == .left ? -1 : 1 }
+        var hapticKey: String { self == .left ? "flap_left" : "flap_right" }
     }
 
     @ObservationIgnored private weak var camera: Entity?
@@ -60,7 +60,6 @@ final class BoxInteractionController {
         self.session = session
     }
 
-    /// Downward angle for inspecting a box with its opening facing upward.
     private let inspectionPitchDegrees: Float = 65
 
     func attach(to root: Entity, camera: Entity) {
@@ -74,11 +73,8 @@ final class BoxInteractionController {
                   let tape = box.children.first(where: { $0.name.hasPrefix("Fita") }),
                   let left = box.children.first(where: { $0.name.hasPrefix("Aba_Esquerda") }),
                   let right = box.children.first(where: { $0.name.hasPrefix("AbaDireita") }) else {
-                print("Missing box rig or parts: \(name)")
                 continue
             }
-            // Reattaching the same entities must not capture opened flaps as
-            // their original closed transforms.
             if let existing = previousRigs[name], existing.box === box {
                 rigs[name] = existing
                 restoreToShelf(existing)
@@ -100,7 +96,6 @@ final class BoxInteractionController {
                 target.components.set(InputTargetComponent())
             }
         }
-        print("Interactive box rigs: \(rigs.count)/9")
     }
 
     private func applyBlackTapeMaterial(to entity: Entity) {
@@ -127,6 +122,10 @@ final class BoxInteractionController {
         guard phase == .idle, let rig = rigs[box.name], let camera else { return }
         selected = rig
         phase = .approaching
+
+        AudioService.shared.playOneShot(named: "CaixaSaindodaEstante", volume: 0.9)
+        HapticService.shared.playImpact(intensity: 0.65, sharpness: 0.45)
+
         let state = session[rig.box.name]
         progress = [.left: state.leftOpenAmount, .right: state.rightOpenAmount]
         applySessionState(to: rig)
@@ -137,8 +136,6 @@ final class BoxInteractionController {
             collision.entity.components.remove(CollisionComponent.self)
         }
 
-        // Keep the camera inside the room and turn downward at its current
-        // position. Save the shelf view so leaving inspection restores it.
         cameraHome = camera.transform
         camera.stopAllAnimations(recursive: false)
         var cameraWorld = Transform(matrix: camera.transformMatrix(relativeTo: nil))
@@ -149,17 +146,11 @@ final class BoxInteractionController {
             * simd_quatf(angle: -inspectionPitch, axis: [1, 0, 0])
         camera.move(to: cameraWorld, relativeTo: nil, duration: 0.95, timingFunction: .easeInOut)
 
-        // Blender +Z is the opening normal. Keep it world-up, with +Y
-        // on screen-left, while the camera looks down into the box.
         let tilt = simd_quatf(angle: inspectionPitch - .pi / 2, axis: [1, 0, 0])
         let turn = simd_quatf(angle: .pi / 2, axis: [0, 0, 1])
         var destination = Transform(matrix: box.transformMatrix(relativeTo: nil))
         destination.rotation = cameraWorld.rotation * tilt * turn
 
-        // Reserve enough screen width for both fully opened flaps, including
-        // portrait layouts and the user's current camera field of view.
-        // Opening the flaps changes visualBounds; always frame using the
-        // original closed dimensions so revisiting a box keeps the same size.
         let bounds = rig.closedBounds
         let fov = camera.components[PerspectiveCameraComponent.self]?.fieldOfViewInDegrees ?? 50.2
         let tanVertical = tan(fov * .pi / 360)
@@ -170,8 +161,6 @@ final class BoxInteractionController {
         let distance = max(openWidth / (2 * tanVertical * aspect * 0.80),
                            height / (2 * tanVertical * 0.78))
             + bounds.extents.z * abs(destination.scale.z) / 2
-        // Keep the box close to the viewer even on narrow screens. Fitting by
-        // distance alone could put it back behind the shelf or outside the room.
         let presentationDistance = min(max(distance, 0.75), 1.15)
         destination.scale *= min(presentationDistance / max(distance, 0.001), 1)
         let openingCenter = SIMD3<Float>(bounds.center.x, bounds.center.y, bounds.max.z)
@@ -185,7 +174,7 @@ final class BoxInteractionController {
                 try await Task.sleep(for: .seconds(0.95))
                 guard let self else { return }
                 self.phase = self.session[rig.box.name].isTapeRemoved ? .ready : .waitingForTape
-            } catch { /* A return or a scene reload cancels the sequence. */ }
+            } catch {}
         }
     }
 
@@ -195,10 +184,28 @@ final class BoxInteractionController {
                 guard belongsToTape(entity, rig: rig) else { return }
                 isDraggingTape = true
                 rig.tape.stopAllAnimations(recursive: false)
+                HapticService.shared.resetGestureTexture(key: "tape")
             }
             let travel = max(Float(viewport.height) * 0.25, 120)
-            tapeProgress = min(max(-Float(translation.height) / travel, 0), 1)
+            let newProgress = min(max(-Float(translation.height) / travel, 0), 1)
+            let delta = newProgress - tapeProgress
+            tapeProgress = newProgress
             rig.tape.transform = tapeTransform(amount: tapeProgress, rig: rig)
+
+            AudioService.shared.updateAngleGestureSound(
+                named: "FitaCaixa",
+                interaction: "tape",
+                progress: tapeProgress,
+                delta: delta,
+                baseVolume: 0.95
+            )
+            HapticService.shared.updateGestureTexture(
+                key: "tape",
+                progress: tapeProgress,
+                step: 0.05,
+                intensityRange: 0.35...0.85,
+                sharpness: 0.75
+            )
         } else {
             updateFlapDrag(on: entity, translation: translation, viewportWidth: viewport.width)
         }
@@ -210,15 +217,25 @@ final class BoxInteractionController {
             return
         }
         isDraggingTape = false
+        HapticService.shared.resetGestureTexture(key: "tape")
+
         guard tapeProgress >= 0.65 else {
             tapeProgress = 0
+            AudioService.shared.finishAngleGestureSound(named: "FitaCaixa", interaction: "tape", completed: false)
             rig.tape.move(to: rig.tapeHome, relativeTo: rig.box, duration: 0.2, timingFunction: .easeInOut)
             return
         }
-        // Commit the completed gesture before its settling animation, so
-        // returning or reloading the scene cannot put the removed tape back.
+
         session[rig.box.name].isTapeRemoved = true
         phase = .removingTape
+        AudioService.shared.finishAngleGestureSound(
+            named: "FitaCaixa",
+            interaction: "tape",
+            completed: true,
+            animationDuration: 0.25
+        )
+
+        HapticService.shared.playImpact(intensity: 0.9, sharpness: 0.85)
         rig.tape.move(to: tapeTransform(amount: 1, rig: rig), relativeTo: rig.box,
                       duration: 0.25, timingFunction: .easeOut)
         sequence = Task { [weak self] in
@@ -227,7 +244,7 @@ final class BoxInteractionController {
                 guard let self else { return }
                 rig.tape.isEnabled = false
                 self.phase = .ready
-            } catch { }
+            } catch {}
         }
     }
 
@@ -243,8 +260,6 @@ final class BoxInteractionController {
 
     private func tapeTransform(amount: Float, rig: Rig) -> Transform {
         var transform = rig.tapeHome
-        // Local +X projects upward in the inspection view; +Z lifts the tape
-        // away from the lid as the user's finger pulls toward the top edge.
         transform.translation += SIMD3<Float>(0.45, 0, 0.35) * amount
         transform.rotation = simd_quatf(angle: -.pi / 3 * amount, axis: [0, 1, 0])
             * rig.tapeHome.rotation
@@ -258,20 +273,53 @@ final class BoxInteractionController {
             dragSide = side
             dragStartProgress = progress[side, default: 0]
             flap(side, rig: rig).stopAllAnimations(recursive: false)
+            HapticService.shared.resetGestureTexture(key: side.hapticKey)
         }
         guard dragSide == side else { return }
         let travel = max(Float(viewportWidth) * 0.20, 100)
+        let previousAmount = progress[side, default: 0]
         let amount = min(max(dragStartProgress + Float(translation.width) * side.sign / travel, 0), 1)
+        let delta = amount - previousAmount
         progress[side] = amount
         saveFlapProgress(side, amount: amount, rig: rig)
         flap(side, rig: rig).transform = flapTransform(side, amount: amount, rig: rig)
+
+        AudioService.shared.updateAngleGestureSound(
+            named: "Abrindocaixa",
+            interaction: side.hapticKey,
+            progress: amount,
+            delta: delta,
+            baseVolume: 0.90
+        )
+        HapticService.shared.updateGestureTexture(
+            key: side.hapticKey,
+            progress: amount,
+            step: 0.08,
+            intensityRange: 0.25...0.60,
+            sharpness: 0.45
+        )
     }
 
     func endFlapDrag() {
         guard let side = dragSide, let rig = selected else { return }
-        let amount: Float = progress[side, default: 0] >= 0.35 ? 1 : 0
+        HapticService.shared.resetGestureTexture(key: side.hapticKey)
+
+        let startingAmount = dragStartProgress
+        let wasOpened = progress[side, default: 0] >= 0.35
+        let amount: Float = wasOpened ? 1 : 0
         progress[side] = amount
         saveFlapProgress(side, amount: amount, rig: rig)
+
+        AudioService.shared.finishAngleGestureSound(
+            named: "Abrindocaixa",
+            interaction: side.hapticKey,
+            completed: wasOpened,
+            animationDuration: 0.22
+        )
+
+        if abs(amount - startingAmount) > 0.01 {
+            HapticService.shared.playImpact(intensity: amount > 0.5 ? 0.55 : 0.35, sharpness: 0.4)
+        }
         flap(side, rig: rig).move(
             to: flapTransform(side, amount: amount, rig: rig),
             relativeTo: rig.box, duration: 0.22, timingFunction: .easeInOut
@@ -282,6 +330,7 @@ final class BoxInteractionController {
     func returnToShelf() {
         guard let rig = selected, phase != .returning else { return }
         sequence?.cancel()
+        AudioService.shared.stopAllContinuousSounds()
         dragSide = nil
         isDraggingTape = false
         phase = .returning
@@ -305,13 +354,14 @@ final class BoxInteractionController {
                 self.restoreCamera()
                 self.selected = nil
                 self.phase = .idle
-            } catch { }
+            } catch {}
         }
     }
 
     func resetPresentation() {
         sequence?.cancel()
         sequence = nil
+        AudioService.shared.stopAllContinuousSounds()
         if let selected {
             markFlapsClosed(in: selected)
             restoreToShelf(selected)

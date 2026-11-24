@@ -19,6 +19,7 @@ struct BlenderAssetLoader {
                 print("Removed \(embeddedCameraCount) embedded cameras from room asset")
                 let embeddedAlbumCount = removeEmbeddedAlbums(from: entity)
                 print("Removed \(embeddedAlbumCount) embedded albums from room asset")
+                removeTimeOfDayObjects(from: entity)
                 configureShelfInteraction(in: entity)
                 configureDrawerInteraction(in: entity)
                 configureDeskInteraction(in: entity)
@@ -116,6 +117,36 @@ struct BlenderAssetLoader {
             album.removeFromParent()
         }
         return albums.count
+    }
+
+    /// Removes the Blender time-of-day props from the imported `world` scene,
+    /// leaving the room geometry intact so exterior light can reach the window.
+    private func removeTimeOfDayObjects(from root: Entity) {
+        // Entity(contentsOf:) may return `world` itself as the root; the loader
+        // assigns that root the logical name `BaseScenario` before this runs.
+        let world = findEntity(named: "world", in: root) ?? root
+
+        let targetNames: Set<String> = ["manha", "manha_001", "tarde", "noite"]
+        var objectsToRemove: [Entity] = []
+        func collect(from parent: Entity) {
+            for child in parent.children {
+                let normalizedName = child.name.folding(
+                    options: [.caseInsensitive, .diacriticInsensitive],
+                    locale: .current
+                )
+                if targetNames.contains(normalizedName) {
+                    objectsToRemove.append(child)
+                } else {
+                    collect(from: child)
+                }
+            }
+        }
+        collect(from: world)
+
+        for object in objectsToRemove {
+            object.removeFromParent()
+        }
+        print("Removed \(objectsToRemove.count) time-of-day objects from world: \(objectsToRemove.map(\.name).joined(separator: ", "))")
     }
 
     private func configureShelfInteraction(in root: Entity) {
