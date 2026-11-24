@@ -164,8 +164,15 @@ struct ContentView: View {
                         if photoInteractionController.isOpen { closePhotoCard() }
                         else { albumController.closeBook() }
                     } label: {
-                        Label(photoInteractionController.isOpen ? "photo.back.book" : "album.back.box",
-                              systemImage: "arrow.left")
+                        Label {
+                            if photoInteractionController.isOpen {
+                                Text("photo.back.book")
+                            } else {
+                                Text("album.back.box")
+                            }
+                        } icon: {
+                            Image(systemName: "arrow.left")
+                        }
                     }
 //                    .disabled(albumController.phase == .returning || photoInteractionController.isTransitioning)
 //                    Text(albumController.activeAlbum?.title ?? "")
@@ -181,7 +188,7 @@ struct ContentView: View {
                         albumController.clearAlbums()
                         boxInteractionController.returnToShelf()
                     } label: {
-                        Label("voltar", systemImage: "arrow.uturn.backward")
+                        Label("navigation.back.to.shelf", systemImage: "arrow.uturn.backward")
                     }
                     .disabled(boxInteractionController.phase == .returning)
                     if boxInteractionController.phase == .waitingForTape {
@@ -197,7 +204,7 @@ struct ContentView: View {
                 Button {
                     orbitController.returnFromFocus()
                 } label: {
-                    Label("voltar", systemImage: "arrow.left")//voltar ao quarto
+                    Label("navigation.back.to.room", systemImage: "arrow.left")
                         .padding(12)
                         .frame(minHeight: 44)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
@@ -320,7 +327,11 @@ struct ContentView: View {
             return
         }
         if let drawer = drawerAncestor(from: entity) {
-            orbitController.toggleFocus(on: drawer, lookingFromFront: true, pitchDegrees: 45, minimumRadius: 2.1)
+            // Tapping an already focused drawer must not leave the focused view.
+            // The explicit Back button is the only way to return from focus.
+            if !orbitController.isFocused {
+                orbitController.toggleFocus(on: drawer, lookingFromFront: true, pitchDegrees: 45, minimumRadius: 2.1)
+            }
             return
         }
         if let desk = deskAncestor(from: entity) {
@@ -472,7 +483,9 @@ struct ContentView: View {
     private var bookStatus: some View {
         if albumController.isLoadingPage || albumController.hasUnavailablePhotos {
             VStack(spacing: 8) {
-                if albumController.isLoadingPage { ProgressView("album.loading") }
+                if albumController.isLoadingPage && albumController.phase != .entering {
+                    ProgressView("album.loading")
+                }
                 if albumController.hasUnavailablePhotos {
                     Button("album retry") { albumController.retryPage() }
                         .disabled(albumController.isTurningPage)

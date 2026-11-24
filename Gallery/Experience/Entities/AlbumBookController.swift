@@ -353,10 +353,14 @@ final class AlbumBookController {
             guard !Task.isCancelled, self.readingSessionID == session else { return }
             book.stopAllAnimations(recursive: true)
             rig.resetTurn(materials: self.pageCache.materials(at: self.pageIndex))
-            self.pageCache.setAnimationActive(true)
             rig.maskLeftPageForClosing()
             if rig.root.isEnabled { await rig.animateCover(open: false) }
             guard !Task.isCancelled, self.readingSessionID == session else { return }
+            // Release page textures only after the cover is closed and the
+            // sheet rig is no longer visible. This prevents a turning-page
+            // material from lingering while the album returns into its box.
+            self.pageCache.clear()
+            self.cachedAlbum = nil
             rig.root.isEnabled = false
             self.travelModel?.isEnabled = true
             self.box?.isEnabled = self.boxWasEnabled
@@ -381,8 +385,6 @@ final class AlbumBookController {
                 }
             }
             guard !Task.isCancelled, self.readingSessionID == session else { return }
-            self.pageCache.clear()
-            self.cachedAlbum = nil
             self.transitionTask = nil
             self.removeBook()
         }

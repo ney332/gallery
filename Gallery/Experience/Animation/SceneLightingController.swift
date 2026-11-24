@@ -22,7 +22,7 @@ final class SceneLightingController {
     private weak var sceneRoot: Entity?
     private var exteriorLight: Entity?
     private var interiorLight: Entity?
-    private var lampLight: Entity?
+    private var composerLampLights: [Entity] = []
 
     private var preset: SceneLightingPreset = .forCurrentTime()
     private var isExteriorEnabled = true
@@ -68,31 +68,8 @@ final class SceneLightingController {
         root.addChild(interior)
         interiorLight = interior
 
-        // Luz do abajur (ativada ao tocar no abajur).
-        let lamp = Entity()
-        lamp.name = "CodeBedsideLampLight"
-        if let shade = findEntity(named: "Topo_do_Abajur", in: root) {
-            let shadeBounds = shade.visualBounds(relativeTo: root)
-            // Place the emitter just inside the shade's lower opening.
-            lamp.position = SIMD3<Float>(
-                shadeBounds.center.x,
-                shadeBounds.min.y + shadeBounds.extents.y * 0.18,
-                shadeBounds.center.z
-            )
-        }
-        // SpotLight emits along local -Z; rotate it toward the tabletop (-Y).
-        lamp.orientation = simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
-        var lampComponent = SpotLightComponent()
-        lampComponent.innerAngleInDegrees = 45
-        lampComponent.outerAngleInDegrees = 85
-        lampComponent.attenuationRadius = 2.4
-        lamp.components.set([
-            lampComponent,
-            SpotLightComponent.Shadow()
-        ])
-        lamp.isEnabled = false
-        root.addChild(lamp)
-        lampLight = lamp
+        composerLampLights = installComposerLampLights(in: root)
+        print("Lamp tap controls \(composerLampLights.count) Composer PointLight(s)")
 
         applyPreset()
         print("Installed code lighting: exterior enabled, light shadows enabled")
@@ -121,7 +98,9 @@ final class SceneLightingController {
 
     func setLampEnabled(_ enabled: Bool) {
         isLampEnabled = enabled
-        lampLight?.isEnabled = enabled
+        for lightHost in composerLampLights {
+            lightHost.isEnabled = enabled
+        }
     }
 
     func toggleLamp() {
@@ -166,11 +145,37 @@ final class SceneLightingController {
             interiorLight?.isEnabled = isInteriorEnabled
         }
 
-        if var light = lampLight?.components[SpotLightComponent.self] {
-            light.intensity = 1_200
-            light.color = UIColor(red: 1.0, green: 0.76, blue: 0.52, alpha: 1)
-            lampLight?.components.set(light)
-            lampLight?.isEnabled = isLampEnabled
+    }
+
+    /// Moves each Composer-authored lamp light onto an empty child entity.
+    /// This lets the app toggle the light entity without disabling the shade
+    /// mesh that originally carries its PointLightComponent.
+    private func installComposerLampLights(in root: Entity) -> [Entity] {
+        var sourceEntities: [Entity] = []
+
+        func collect(_ entity: Entity, insideLamp: Bool) {
+            let isLampPart = insideLamp || ["Abajur", "Topo_do_Abajur"].contains {
+                entity.name.compare($0, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            }
+            if isLampPart, entity.components[PointLightComponent.self] != nil {
+                sourceEntities.append(entity)
+            }
+            for child in entity.children {
+                collect(child, insideLamp: isLampPart)
+            }
+        }
+        collect(root, insideLamp: false)
+
+        return sourceEntities.enumerated().compactMap { index, source in
+            guard let component = source.components[PointLightComponent.self] else { return nil }
+            source.components.remove(PointLightComponent.self)
+
+            let lightHost = Entity()
+            lightHost.name = "ComposerLampPointLight_\(index + 1)"
+            lightHost.components.set(component)
+            lightHost.isEnabled = false
+            source.addChild(lightHost)
+            return lightHost
         }
     }
 
