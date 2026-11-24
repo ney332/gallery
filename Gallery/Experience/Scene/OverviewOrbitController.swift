@@ -143,13 +143,15 @@ final class OverviewOrbitController {
     }
 
     func beginDrag() {
-        guard !isCameraFixedForFocus else { return }
+        // Keep the room overview camera fixed. Drag orbit is available only
+        // after a tap has entered an object's focused view.
+        guard isFocused, !isCameraFixedForFocus else { return }
         yawAtDragStart = yaw
         pitchAtDragStart = pitch
     }
 
     func updateDrag(translation: CGSize) {
-        guard !isCameraFixedForFocus else { return }
+        guard isFocused, !isCameraFixedForFocus else { return }
         let sensitivity = viewportSize.width > 0
             ? 2 * Float.pi / Float(viewportSize.width)
             : 0.01
@@ -174,6 +176,8 @@ final class OverviewOrbitController {
     func endDrag() {}
 
     func updateZoom(magnification: CGFloat) {
+        // Pinch zoom must not move the camera while the full room is shown.
+        guard isFocused else { return }
         guard let camera else { return }
         guard var component = camera.components[PerspectiveCameraComponent.self] else { return }
         if zoomAtDragStart == nil { zoomAtDragStart = component.fieldOfViewInDegrees }

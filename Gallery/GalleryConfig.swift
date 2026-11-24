@@ -19,8 +19,8 @@ enum GalleryConfig {
     // Blender Z-up camera location converted to RealityKit's Y-up coordinates.
     static let overviewCameraPosition = SIMD3<Float>(-1.9687666, 2.2591279, -1.9687669)
     // Orbit target converted from Blender Z-up coordinates to RealityKit's Y-up coordinates.
-    static let overviewCameraTarget = SIMD3<Float>(-0.8307, 1.5751, -0.4731)
-    static let overviewCameraYaw: Float = -142.73296 * .pi / 180
+    static let overviewCameraTarget = SIMD3<Float>(-0.7047, 1.5751, -0.5780)
+    static let overviewCameraYaw: Float = -137.73296 * .pi / 180
     static let overviewCameraPitch: Float = 20 * .pi / 180
     static let overviewCameraRadius: Float = 2.0
     static let archiveBoxScale: Float = 0.12
