@@ -36,6 +36,11 @@ final class OverviewOrbitController {
     private var isCameraFixedForFocus = false
     var isShelfFocusReady: Bool { isShelfFocused && Date() >= focusReadyAt }
     var isFocused: Bool { savedOrbitState != nil }
+    var isFocusReady: Bool { isFocused && Date() >= focusReadyAt }
+
+    func isFocused(on entity: Entity) -> Bool {
+        focusedEntity === entity
+    }
 
     private struct OrbitState {
         let target: SIMD3<Float>

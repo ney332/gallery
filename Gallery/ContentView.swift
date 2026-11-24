@@ -109,6 +109,8 @@ struct ContentView: View {
                 }
                 .onChanged { value in
                     guard let drawer = drawerAncestor(from: value.entity),
+                          orbitController.isFocused(on: drawer),
+                          orbitController.isFocusReady,
                           !boxInteractionController.isActive else { return }
                     scenarioAnimationController.dragDrawer(
                         named: drawer.name,
@@ -338,8 +340,8 @@ struct ContentView: View {
             }
             return
         }
-        if let desk = deskAncestor(from: entity) {
-            orbitController.toggleFocus(on: desk, lookingFromFront: true, pitchDegrees: 75, minimumRadius: 1.15)
+        if deskAncestor(from: entity) != nil {
+            // A mesa não inicia mais o move-in da câmera.
             return
         }
         if lampAncestor(from: entity) != nil {
