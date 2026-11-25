@@ -23,6 +23,9 @@ final class SceneLightingController {
     private var exteriorLight: Entity?
     private var interiorLight: Entity?
     private var composerLampLights: [Entity] = []
+    private weak var lampPull: Entity?
+    private var lampPullHome: Transform?
+    private var lampPullTask: Task<Void, Never>?
 
     private var preset: SceneLightingPreset = .forCurrentTime()
     private var isExteriorEnabled = true
@@ -30,6 +33,10 @@ final class SceneLightingController {
     private var isLampEnabled = false
 
     func attach(to root: Entity, preset: SceneLightingPreset = .forCurrentTime()) {
+        lampPullTask?.cancel()
+        lampPullTask = nil
+        lampPull = nil
+        lampPullHome = nil
         sceneRoot = root
         self.preset = preset
 
@@ -70,6 +77,14 @@ final class SceneLightingController {
 
         composerLampLights = installComposerLampLights(in: root)
         print("Lamp tap controls \(composerLampLights.count) Composer PointLight(s)")
+        lampPull = findEntity(named: "PuxadorBolinhas", in: root)
+        if lampPull == nil, let shade = findEntity(named: "Topo_do_Abajur", in: root) {
+            lampPull = findLampPull(in: shade)
+        }
+        if lampPull == nil, let lampBase = findEntity(named: "Abajur", in: root) {
+            lampPull = findLampPull(in: lampBase)
+        }
+        print("Lamp pull target: " + (lampPull?.name ?? "not found"))
 
         applyPreset()
         print("Installed code lighting: exterior enabled, light shadows enabled")
@@ -104,7 +119,50 @@ final class SceneLightingController {
     }
 
     func toggleLamp() {
-        setLampEnabled(!isLampEnabled)
+        let turningOn = !isLampEnabled
+        setLampEnabled(turningOn)
+        AudioService.shared.playOneShot(
+            named: turningOn ? "LigarAbajour" : "DesligarAbajour",
+            volume: 0.9
+        )
+        animateLampPull()
+    }
+
+    private func animateLampPull() {
+        guard let pull = lampPull else { return }
+        lampPullTask?.cancel()
+        pull.stopAllAnimations(recursive: false)
+
+        let home = lampPullHome ?? pull.transform
+        lampPullHome = home
+        var pulled = home
+        let parentWorld = pull.parent?.transformMatrix(relativeTo: nil) ?? matrix_identity_float4x4
+        let localDown = simd_inverse(parentWorld) * SIMD4<Float>(0, -0.055, 0, 0)
+        pulled.translation += SIMD3<Float>(localDown.x, localDown.y, localDown.z)
+        pull.move(to: pulled, relativeTo: pull.parent, duration: 0.12, timingFunction: .easeOut)
+
+        lampPullTask = Task { [weak pull] in
+            do {
+                try await Task.sleep(for: .milliseconds(140))
+                guard !Task.isCancelled, let pull else { return }
+                pull.move(to: home, relativeTo: pull.parent, duration: 0.20, timingFunction: .easeOut)
+            } catch {}
+        }
+    }
+
+    private func findLampPull(in shade: Entity) -> Entity? {
+        let likelyNames = ["bolinha", "puxador", "cordao", "cordão", "pendulo", "pêndulo"]
+        func search(_ entity: Entity) -> Entity? {
+            let name = entity.name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            if entity !== shade, likelyNames.contains(where: { name.contains($0) }) {
+                return entity
+            }
+            for child in entity.children {
+                if let match = search(child) { return match }
+            }
+            return nil
+        }
+        return search(shade)
     }
 
     private func applyPreset() {

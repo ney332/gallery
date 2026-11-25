@@ -3,14 +3,12 @@ import Observation
 import RealityKit
 import simd
 
-/// Slides the glass up or down with a vertical drag on the window opening.
+/// Toggles the window glass between its closed and open positions on tap.
 @MainActor
 @Observable
 final class WindowInteractionController {
-    private(set) var isDragging = false
+    private(set) var isAnimating = false
 
-    /// A drag covering this fraction of the screen spans the full opening.
-    private let dragHeightFraction: Float = 0.35
     private let openingHeightFraction: Float = 0.95
 
     @ObservationIgnored private weak var glass: Entity?
@@ -18,11 +16,13 @@ final class WindowInteractionController {
     @ObservationIgnored private var closedTransform = Transform()
     @ObservationIgnored private var liftInParent = SIMD3<Float>.zero
     @ObservationIgnored private var progress: Float = 0
-    @ObservationIgnored private var previousTranslationY: Float = 0
-    @ObservationIgnored private var dragTravel: Float = 120
+    @ObservationIgnored private var animationTask: Task<Void, Never>?
 
     func attach(to glass: Entity?) {
-        endDrag()
+        animationTask?.cancel()
+        animationTask = nil
+        self.glass?.stopAllAnimations(recursive: false)
+        isAnimating = false
         touchTarget?.removeFromParent()
         touchTarget = nil
         self.glass = glass
@@ -41,7 +41,7 @@ final class WindowInteractionController {
         let bounds = glass.visualBounds(relativeTo: glass)
         let size = simd_max(bounds.extents, SIMD3<Float>(repeating: 0.025))
         let target = Entity()
-        target.name = "WindowDragTarget"
+        target.name = "WindowTapTarget"
         target.transform = closedTransform
         target.components.set(CollisionComponent(shapes: [
             ShapeResource.generateBox(size: size).offsetBy(translation: bounds.center)
@@ -60,28 +60,47 @@ final class WindowInteractionController {
         return false
     }
 
-    func updateDrag(translation: CGSize, viewportHeight: CGFloat) {
-        guard let glass else { return }
-        if !isDragging {
-            isDragging = true
-            previousTranslationY = 0
-            dragTravel = max(Float(viewportHeight) * dragHeightFraction, 120)
+    func toggle() {
+        guard !isAnimating, let glass else { return }
+        let opening = progress < 0.5
+        let destinationProgress: Float = opening ? 1 : 0
+        let soundName = opening ? "AbrirJanela" : "FecharJanela"
+        let audioDuration = AudioService.shared.playOneShot(named: soundName, volume: 0.85)
+        let duration = max(audioDuration, 0.8)
+
+        progress = destinationProgress
+        isAnimating = true
+        glass.stopAllAnimations(recursive: false)
+        let startTransform = glass.transform
+        var destination = closedTransform
+        destination.translation += liftInParent * destinationProgress
+
+        animationTask?.cancel()
+        animationTask = Task { [weak self, weak glass] in
+            let startTime = ProcessInfo.processInfo.systemUptime
+            while !Task.isCancelled {
+                guard let self, let glass else { return }
+                let elapsed = ProcessInfo.processInfo.systemUptime - startTime
+                let linearProgress = Float(min(elapsed / duration, 1))
+                let easedProgress = linearProgress * linearProgress * (3 - 2 * linearProgress)
+
+                var frameTransform = startTransform
+                frameTransform.translation = startTransform.translation
+                    + (destination.translation - startTransform.translation) * easedProgress
+                glass.transform = frameTransform
+
+                guard linearProgress < 1 else {
+                    self.isAnimating = false
+                    self.animationTask = nil
+                    return
+                }
+
+                do {
+                    try await Task.sleep(for: .milliseconds(16))
+                } catch {
+                    return
+                }
+            }
         }
-
-        // Screen Y decreases upward. Apply deltas so reversing direction at
-        // either limit immediately moves the glass again, without dead travel.
-        let translationY = Float(translation.height)
-        let delta = translationY - previousTranslationY
-        previousTranslationY = translationY
-        progress = min(max(progress - delta / dragTravel, 0), 1)
-        var transform = closedTransform
-        transform.translation += liftInParent * progress
-        glass.transform = transform
-    }
-
-    func endDrag() {
-        isDragging = false
-        previousTranslationY = 0
-        // Keep the current opening when the user releases or cancels the drag.
     }
 }

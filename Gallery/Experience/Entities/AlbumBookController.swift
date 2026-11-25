@@ -253,7 +253,10 @@ final class AlbumBookController {
                 return
             }
             pageCache.setAnimationActive(true)
-            if pageIndex > 0 && next > 0 { rig.beginTurn(by: direction) }
+            AudioService.shared.playOneShot(named: "PageSound", volume: 0.85)
+            if pageIndex > 0 && next > 0 {
+                rig.beginTurn(by: direction)
+            }
             if let materials { rig.setPhotos(materials) }
             phase = .dragging
             updateTurnPose()
@@ -354,7 +357,10 @@ final class AlbumBookController {
             book.stopAllAnimations(recursive: true)
             rig.resetTurn(materials: self.pageCache.materials(at: self.pageIndex))
             rig.maskLeftPageForClosing()
-            if rig.root.isEnabled { await rig.animateCover(open: false) }
+            if rig.root.isEnabled {
+                AudioService.shared.playOneShot(named: "PageSound", volume: 0.85)
+                await rig.animateCover(open: false)
+            }
             guard !Task.isCancelled, self.readingSessionID == session else { return }
             // Release page textures only after the cover is closed and the
             // sheet rig is no longer visible. This prevents a turning-page
@@ -534,6 +540,7 @@ final class AlbumBookController {
                 self.isLoadingPage = false
                 self.pageCache.setAnimationActive(true)
                 self.frameBook(open: true, animated: true)
+                AudioService.shared.playOneShot(named: "PageSound", volume: 0.85)
                 await rig.animateCover(open: true)
                 guard !Task.isCancelled, self.readingSessionID == session else { return }
             }

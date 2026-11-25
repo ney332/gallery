@@ -195,7 +195,7 @@ struct BlenderAssetLoader {
     }
 
     private func configureLampInteraction(in root: Entity) {
-        let lampPartNames = ["Abajur", "Topo_do_Abajur"]
+        let lampPartNames = ["Abajur", "Topo_do_Abajur", "PuxadorBolinhas"]
         var configuredParts = 0
         for name in lampPartNames {
             guard let part = findEntity(named: name, in: root) else { continue }

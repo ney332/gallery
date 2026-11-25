@@ -184,21 +184,14 @@ final class BoxInteractionController {
                 guard belongsToTape(entity, rig: rig) else { return }
                 isDraggingTape = true
                 rig.tape.stopAllAnimations(recursive: false)
+                AudioService.shared.playOneShot(named: "FitaCaixa", volume: 0.95)
                 HapticService.shared.resetGestureTexture(key: "tape")
             }
             let travel = max(Float(viewport.height) * 0.25, 120)
             let newProgress = min(max(-Float(translation.height) / travel, 0), 1)
-            let delta = newProgress - tapeProgress
             tapeProgress = newProgress
             rig.tape.transform = tapeTransform(amount: tapeProgress, rig: rig)
 
-            AudioService.shared.updateAngleGestureSound(
-                named: "FitaCaixa",
-                interaction: "tape",
-                progress: tapeProgress,
-                delta: delta,
-                baseVolume: 0.95
-            )
             HapticService.shared.updateGestureTexture(
                 key: "tape",
                 progress: tapeProgress,
@@ -221,20 +214,12 @@ final class BoxInteractionController {
 
         guard tapeProgress >= 0.65 else {
             tapeProgress = 0
-            AudioService.shared.finishAngleGestureSound(named: "FitaCaixa", interaction: "tape", completed: false)
             rig.tape.move(to: rig.tapeHome, relativeTo: rig.box, duration: 0.2, timingFunction: .easeInOut)
             return
         }
 
         session[rig.box.name].isTapeRemoved = true
         phase = .removingTape
-        AudioService.shared.finishAngleGestureSound(
-            named: "FitaCaixa",
-            interaction: "tape",
-            completed: true,
-            animationDuration: 0.25
-        )
-
         HapticService.shared.playImpact(intensity: 0.9, sharpness: 0.85)
         rig.tape.move(to: tapeTransform(amount: 1, rig: rig), relativeTo: rig.box,
                       duration: 0.25, timingFunction: .easeOut)
@@ -273,24 +258,16 @@ final class BoxInteractionController {
             dragSide = side
             dragStartProgress = progress[side, default: 0]
             flap(side, rig: rig).stopAllAnimations(recursive: false)
+            AudioService.shared.playOneShot(named: "Abrindocaixa", volume: 0.9)
             HapticService.shared.resetGestureTexture(key: side.hapticKey)
         }
         guard dragSide == side else { return }
         let travel = max(Float(viewportWidth) * 0.20, 100)
-        let previousAmount = progress[side, default: 0]
         let amount = min(max(dragStartProgress + Float(translation.width) * side.sign / travel, 0), 1)
-        let delta = amount - previousAmount
         progress[side] = amount
         saveFlapProgress(side, amount: amount, rig: rig)
         flap(side, rig: rig).transform = flapTransform(side, amount: amount, rig: rig)
 
-        AudioService.shared.updateAngleGestureSound(
-            named: "Abrindocaixa",
-            interaction: side.hapticKey,
-            progress: amount,
-            delta: delta,
-            baseVolume: 0.90
-        )
         HapticService.shared.updateGestureTexture(
             key: side.hapticKey,
             progress: amount,
@@ -310,13 +287,6 @@ final class BoxInteractionController {
         progress[side] = amount
         saveFlapProgress(side, amount: amount, rig: rig)
 
-        AudioService.shared.finishAngleGestureSound(
-            named: "Abrindocaixa",
-            interaction: side.hapticKey,
-            completed: wasOpened,
-            animationDuration: 0.22
-        )
-
         if abs(amount - startingAmount) > 0.01 {
             HapticService.shared.playImpact(intensity: amount > 0.5 ? 0.55 : 0.35, sharpness: 0.4)
         }
@@ -330,7 +300,6 @@ final class BoxInteractionController {
     func returnToShelf() {
         guard let rig = selected, phase != .returning else { return }
         sequence?.cancel()
-        AudioService.shared.stopAllContinuousSounds()
         dragSide = nil
         isDraggingTape = false
         phase = .returning
@@ -361,7 +330,6 @@ final class BoxInteractionController {
     func resetPresentation() {
         sequence?.cancel()
         sequence = nil
-        AudioService.shared.stopAllContinuousSounds()
         if let selected {
             markFlapsClosed(in: selected)
             restoreToShelf(selected)

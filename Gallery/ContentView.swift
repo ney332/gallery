@@ -43,7 +43,7 @@ struct ContentView: View {
     }
 
     private func scene(viewportSize: CGSize) -> some View {
-        RealityView { content in
+        let interactiveScene = AnyView(RealityView { content in
             content.camera = .virtual
             let loader = BlenderAssetLoader(catalog: .main)
             let roomFallback = loader.fallback(for: .room)
@@ -91,15 +91,6 @@ struct ContentView: View {
                     state = !boxInteractionController.isActive
                         && windowInteractionController.contains(value.entity)
                 }
-                .onChanged { value in
-                    guard !boxInteractionController.isActive,
-                          windowInteractionController.contains(value.entity) else { return }
-                    windowInteractionController.updateDrag(
-                        translation: value.translation,
-                        viewportHeight: viewportSize.height
-                    )
-                }
-                .onEnded { _ in windowInteractionController.endDrag() }
         )
         .simultaneousGesture(
             DragGesture(minimumDistance: 4, coordinateSpace: .local)
@@ -143,79 +134,51 @@ struct ContentView: View {
                 .updating($isPageGestureActive) { _, state, _ in
                     state = albumController.isReading
                 }
-                .onChanged { value in handleContinuousDrag(value.translation, viewportSize: viewportSize) }
-                .onEnded { value in handleContinuousDragEnd(value) }
+                .onChanged { value in
+                    handleContinuousDrag(value.translation, viewportSize: viewportSize)
+                }
+                .onEnded { value in
+                    handleContinuousDragEnd(value)
+                }
         )
         .simultaneousGesture(
             MagnifyGesture() //permite zoom em pinça
                 .onChanged {
                     guard !boxInteractionController.isActive,
                           !photoInteractionController.isOpen,
-                          !isPressingWindow, !windowInteractionController.isDragging else { return }
+                          !isPressingWindow, !windowInteractionController.isAnimating else { return }
                     orbitController.updateZoom(magnification: $0.magnification)
                 }
                 .onEnded { _ in orbitController.endZoom() }
         )
+        )
         // Keep the full-screen annotation gesture below navigation controls so
         // the back and close buttons remain tappable while the card is flipped.
-        .overlay { photoAnnotationOverlay(viewportSize: viewportSize) }
-        .overlay(alignment: .topLeading) {
-            if albumController.isReading {
-                HStack(spacing: 16) {
-                    Button {
-                        if photoInteractionController.isOpen { closePhotoCard() }
-                        else { albumController.closeBook() }
-                    } label: {
-                        Label {
-                            if photoInteractionController.isOpen {
-                                Text("photo.back.book")
-                            } else {
-                                Text("album.back.box")
-                            }
-                        } icon: {
-                            Image(systemName: "arrow.left")
-                        }
-                    }
-//                    .disabled(albumController.phase == .returning || photoInteractionController.isTransitioning)
-//                    Text(albumController.activeAlbum?.title ?? "")
-//                        .font(.headline)
-                }
-                .padding(12)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-                .padding(.horizontal, 24)
-                .padding(.top, 52)
-            } else if boxInteractionController.isActive {
-                HStack(spacing: 16) {
-                    Button {
-                        boxInteractionController.returnToShelf()
-                    } label: {
-                        Label("navigation.back.to.shelf", systemImage: "arrow.uturn.backward")
-                    }
-                    .disabled(boxInteractionController.phase == .returning)
-                    if boxInteractionController.phase == .waitingForTape {
-//                        Text("Arraste a fita para cima")
-//                            .font(.callout)
-                    }
-                }
-                .padding(12)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-                .padding(.horizontal, 24)
-                .padding(.top, 52)
-            } else if orbitController.isFocused {
-                Button {
-                    orbitController.returnFromFocus()
-                } label: {
-                    Label("navigation.back.to.room", systemImage: "arrow.left")
-                        .padding(12)
-                        .frame(minHeight: 44)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 52)
+        return interactiveScene
+            .overlay { AnyView(photoAnnotationOverlay(viewportSize: viewportSize)) }
+            .overlay(alignment: .topLeading) { AnyView(sceneNavigationControls) }
+            .overlay(alignment: .topTrailing) { AnyView(photoCardControls) }
+            .overlay(alignment: .bottom) { AnyView(sceneStatusOverlay) }
+            .overlay(alignment: .bottom) { AnyView(photoMarkupToolbar) }
+            .task { await libraryModel.load() }
+            .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
+                guard scenePhase == .active else { return }
+                sceneLightingController.refreshForCurrentTime()
             }
-        }
-        .overlay(alignment: .topTrailing) { photoCardControls }
-        .overlay(alignment: .bottom) {
+        .onChange(of: boxInteractionController.phase) { _, _ in refreshAlbums() }
+        .onChange(of: boxInteractionController.canAccessAlbums) { _, _ in refreshAlbums() }
+        .onChange(of: albumController.isPrepared) { _, _ in refreshAlbums() }
+        .onChange(of: libraryModel.years) { _, _ in refreshAlbums() }
+        .onChange(of: libraryModel.favorites) { _, _ in refreshAlbums() }
+        .onChange(of: libraryModel.access) { _, _ in refreshAlbums() }
+        .onChange(of: isPageGestureActive) { _, active in handlePageGestureChange(active) }
+        .onChange(of: photoDrawingData) { _, _ in handlePhotoDrawingChange() }
+        .onChange(of: scenePhase) { _, phase in handleScenePhaseChange(phase) }
+        .onDisappear(perform: cleanUpScene)
+    }
+
+    @ViewBuilder
+    private var sceneStatusOverlay: some View {
             if photoInteractionController.isOpen {
                 photoCardStatus
             } else if albumController.isReading {
@@ -231,50 +194,6 @@ struct ContentView: View {
                     .padding(.bottom, 24)
             }
         }
-        .overlay(alignment: .bottom) { photoMarkupToolbar }
-        .task { await libraryModel.load() }
-        .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
-            guard scenePhase == .active else { return }
-            sceneLightingController.refreshForCurrentTime()
-        }
-        .onChange(of: boxInteractionController.phase) { _, _ in refreshAlbums() }
-        .onChange(of: boxInteractionController.canAccessAlbums) { _, _ in refreshAlbums() }
-        .onChange(of: albumController.isPrepared) { _, _ in refreshAlbums() }
-        .onChange(of: libraryModel.years) { _, _ in refreshAlbums() }
-        .onChange(of: libraryModel.favorites) { _, _ in refreshAlbums() }
-        .onChange(of: libraryModel.access) { _, _ in refreshAlbums() }
-        .onChange(of: isPressingWindow) { _, isPressed in
-            if !isPressed { windowInteractionController.endDrag() }
-        }
-        .onChange(of: isPageGestureActive) { _, active in
-            if !active {
-                // Give onEnded a chance to settle a completed gesture first.
-                Task { @MainActor in
-                    await Task.yield()
-                    if !isPageGestureActive { albumController.cancelPageDrag() }
-                }
-            }
-        }
-        .onChange(of: photoDrawingData) { _, _ in
-            guard photoInteractionController.isBackVisible else { return }
-            scheduleAnnotationSave()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            handleScenePhaseChange(phase)
-        }
-        .onDisappear {
-            windowInteractionController.endDrag()
-            annotationSaveTask?.cancel()
-            if let photoID = photoInteractionController.selectedPhotoID {
-                let drawingData = photoDrawingData
-                Task { try? await libraryModel.saveAnnotationDrawing(drawingData, for: photoID) }
-            }
-            photoInteractionController.close()
-            albumController.clearAlbums()
-            boxInteractionController.resetPresentation()
-            AudioService.shared.pauseAmbientLoop()
-        }
-    }
 
     private func refreshAlbums() {
         if boxInteractionController.phase == .returning {
@@ -293,6 +212,81 @@ struct ContentView: View {
         let hasAccess = libraryModel.access == .authorized || libraryModel.access == .limited
         albumController.showAlbums(hasAccess ? libraryModel.albums(forBoxSlot: slot) : [], in: box, bounds: bounds)
         albumController.setInteractionEnabled(boxInteractionController.canAccessAlbums && hasAccess)
+    }
+
+    private func returnFromBoxInspection() {
+        boxInteractionController.returnToShelf()
+    }
+
+    private func handlePageGestureChange(_ active: Bool) {
+        guard !active else { return }
+        Task { @MainActor in
+            await Task.yield()
+            if !isPageGestureActive { albumController.cancelPageDrag() }
+        }
+    }
+
+    private func handlePhotoDrawingChange() {
+        guard photoInteractionController.isBackVisible else { return }
+        scheduleAnnotationSave()
+    }
+
+    private func cleanUpScene() {
+        annotationSaveTask?.cancel()
+        if let photoID = photoInteractionController.selectedPhotoID {
+            let drawingData = photoDrawingData
+            Task { try? await libraryModel.saveAnnotationDrawing(drawingData, for: photoID) }
+        }
+        photoInteractionController.close()
+        albumController.clearAlbums()
+        boxInteractionController.resetPresentation()
+        AudioService.shared.pauseAmbientLoop()
+    }
+
+    @ViewBuilder
+    private var sceneNavigationControls: some View {
+        if albumController.isReading {
+            HStack(spacing: 16) {
+                Button {
+                    if photoInteractionController.isOpen { closePhotoCard() }
+                    else { albumController.closeBook() }
+                } label: {
+                    Label {
+                        if photoInteractionController.isOpen {
+                            Text("photo.back.book")
+                        } else {
+                            Text("album.back.box")
+                        }
+                    } icon: {
+                        Image(systemName: "arrow.left")
+                    }
+                }
+            }
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 24)
+            .padding(.top, 52)
+        } else if boxInteractionController.isActive {
+            HStack(spacing: 16) {
+                Button(action: returnFromBoxInspection) {
+                    Label("navigation.back.to.shelf", systemImage: "arrow.uturn.backward")
+                }
+                .disabled(boxInteractionController.phase == .returning)
+            }
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 24)
+            .padding(.top, 52)
+        } else if orbitController.isFocused {
+            Button(action: orbitController.returnFromFocus) {
+                Label("navigation.back.to.room", systemImage: "arrow.left")
+                    .padding(12)
+                    .frame(minHeight: 44)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 52)
+        }
     }
 
     private func handleEntityTap(_ entity: Entity, viewportSize: CGSize) {
@@ -318,9 +312,11 @@ struct ContentView: View {
             albumController.select(id)
             return
         }
-        guard !boxInteractionController.isActive,
-              !windowInteractionController.isDragging,
-              !windowInteractionController.contains(entity) else { return }
+        guard !boxInteractionController.isActive else { return }
+        if windowInteractionController.contains(entity) {
+            windowInteractionController.toggle()
+            return
+        }
         if let box = boxInteractionController.box(containing: entity) {
             if !orbitController.isShelfFocused {
                 if let shelf = scenarioAnimationController.entity(for: .archiveShelf) {
@@ -373,7 +369,8 @@ struct ContentView: View {
         }
         guard !isDrawerDragGestureActive,
               !boxInteractionController.isActive,
-              !isPressingWindow, !windowInteractionController.isDragging else { return }
+              !isPressingWindow,
+              !windowInteractionController.isAnimating else { return }
         if !isDragging {
             isDragging = true
             orbitController.beginDrag()
@@ -399,10 +396,8 @@ struct ContentView: View {
 
     private func handleScenePhaseChange(_ phase: ScenePhase) {
         if phase != .active {
-            windowInteractionController.endDrag()
             albumController.cancelPageDrag()
             boxInteractionController.endDrag()
-            AudioService.shared.stopAllContinuousSounds()
             AudioService.shared.pauseAmbientLoop()
             if photoInteractionController.isOpen { closePhotoCard() }
         } else {
@@ -690,10 +685,15 @@ struct ContentView: View {
     private func lampAncestor(from entity: Entity) -> Entity? {
         var current: Entity? = entity
         while let candidate = current {
-            if ["Abajur", "Topo_do_Abajur"].contains(where: {
-                candidate.name.compare($0, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
-            }) {
+            let normalizedName = candidate.name.folding(
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: .current
+            )
+            switch normalizedName {
+            case "abajur", "topo_do_abajur", "puxadorbolinhas":
                 return candidate
+            default:
+                break
             }
             current = candidate.parent
         }
