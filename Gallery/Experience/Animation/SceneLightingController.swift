@@ -10,6 +10,29 @@ final class SceneLightingController {
     private var lampPullTask: Task<Void, Never>?
 
     private var isLampEnabled = false
+    
+    func setAmbientLight(scene: Entity, intensity: Float) {
+        guard let luz = scene.findEntity(named: "luz"),
+              var ibl = luz.components[ImageBasedLightComponent.self]
+        else {
+            print("Iluminação não encontrada")
+            return
+        }
+
+        ibl.intensityExponent = intensity
+        luz.components.set(ibl)
+        var receiverCount = 0
+        func connectModels(in entity: Entity) {
+            if entity.components[ModelComponent.self] != nil,
+               entity.components[ImageBasedLightReceiverComponent.self] == nil {
+                entity.components.set(ImageBasedLightReceiverComponent(imageBasedLight: luz))
+                receiverCount += 1
+            }
+            for child in entity.children { connectModels(in: child) }
+        }
+        connectModels(in: scene)
+        print("Composer ambient light connected to \(receiverCount) room models at exponent \(intensity)")
+    }
 
     func attach(to root: Entity) {
         lampPullTask?.cancel()

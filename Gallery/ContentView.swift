@@ -55,9 +55,8 @@ struct ContentView: View {
             photoInteractionController.attach(camera: camera, viewportSize: viewportSize)
 
             let room = await loader.load(.room)
-            // Remove the renderer's ambient contribution for the entire room.
-            // Composer PointLight components still illuminate its descendants.
-            room.components.set(EnvironmentLightingConfigurationComponent(environmentLightingWeight: 0))
+            // Use the authored image-based light as the room's main light.
+            sceneLightingController.setAmbientLight(scene: room, intensity: -5)
             
             albumController.clearAlbums()
             
@@ -697,6 +696,7 @@ struct ContentView: View {
         }
         return nil
     }
+    
 }
 
 #Preview {
