@@ -9,6 +9,7 @@ final class HapticService {
     private var engine: CHHapticEngine?
     private var supportsHaptics = false
     private var lastTickProgress: [String: Float] = [:]
+    private var continuousPlayers: [String: any CHHapticPatternPlayer] = [:]
 
     private init() {
         supportsHaptics = CHHapticEngine.capabilitiesForHardware().supportsHaptics
@@ -76,7 +77,10 @@ final class HapticService {
         sharpness: Float = 0.6
     ) {
         let clamped = min(max(progress, 0), 1)
-        let last = lastTickProgress[key] ?? clamped
+        guard let last = lastTickProgress[key] else {
+            lastTickProgress[key] = clamped
+            return
+        }
 
         if abs(clamped - last) >= step {
             lastTickProgress[key] = clamped
@@ -90,5 +94,47 @@ final class HapticService {
     func resetGestureTexture(key: String) {
         lastTickProgress.removeValue(forKey: key)
         print("📳 [HapticService] Textura háptica resetada para: \(key)")
+    }
+
+    func startContinuousTexture(key: String, duration: TimeInterval, intensity: Float, sharpness: Float) {
+        stopContinuousTexture(key: key)
+        guard supportsHaptics, duration > 0 else { return }
+        do {
+            try engine?.start()
+            let base = CHHapticEvent(
+                eventType: .hapticContinuous,
+                parameters: [
+                    CHHapticEventParameter(parameterID: .hapticIntensity, value: min(max(intensity * 0.25, 0), 1)),
+                    CHHapticEventParameter(parameterID: .hapticSharpness, value: min(max(sharpness, 0), 1))
+                ],
+                relativeTime: 0,
+                duration: duration
+            )
+            // Short, closely spaced impacts give the moving window a soft hiss.
+            let interval: TimeInterval = 0.036
+            var events = [base]
+            for index in 0..<Int(duration / interval) {
+                let variation: Float = [0.75, 1.0, 0.65, 0.9][index % 4]
+                events.append(CHHapticEvent(
+                    eventType: .hapticTransient,
+                    parameters: [
+                        CHHapticEventParameter(parameterID: .hapticIntensity, value: min(max(intensity * variation, 0), 1)),
+                        CHHapticEventParameter(parameterID: .hapticSharpness, value: min(max(sharpness, 0), 1))
+                    ],
+                    relativeTime: Double(index) * interval
+                ))
+            }
+            let pattern = try CHHapticPattern(events: events, parameters: [])
+            let player = try engine?.makePlayer(with: pattern)
+            try player?.start(atTime: 0)
+            continuousPlayers[key] = player
+        } catch {
+            print("❌ [HapticService] Erro ao iniciar textura contínua: \(error)")
+        }
+    }
+
+    func stopContinuousTexture(key: String) {
+        guard let player = continuousPlayers.removeValue(forKey: key) else { return }
+        try? player.stop(atTime: 0)
     }
 }

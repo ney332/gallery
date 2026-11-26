@@ -10,6 +10,7 @@ final class WindowInteractionController {
     private(set) var isAnimating = false
 
     private let openingHeightFraction: Float = 0.95
+    private let movementHapticKey = "window_movement"
 
     @ObservationIgnored private weak var glass: Entity?
     @ObservationIgnored private var touchTarget: Entity?
@@ -21,6 +22,7 @@ final class WindowInteractionController {
     func attach(to glass: Entity?) {
         animationTask?.cancel()
         animationTask = nil
+        HapticService.shared.stopContinuousTexture(key: movementHapticKey)
         self.glass?.stopAllAnimations(recursive: false)
         isAnimating = false
         touchTarget?.removeFromParent()
@@ -66,7 +68,7 @@ final class WindowInteractionController {
         let destinationProgress: Float = opening ? 1 : 0
         let soundName = opening ? "AbrirJanela" : "FecharJanela"
         let audioDuration = AudioService.shared.playOneShot(named: soundName, volume: 0.85)
-        let duration = max(audioDuration, 0.8)
+        let duration = audioDuration.isFinite && audioDuration > 0 ? audioDuration : 0.9
 
         progress = destinationProgress
         isAnimating = true
@@ -76,6 +78,12 @@ final class WindowInteractionController {
         destination.translation += liftInParent * destinationProgress
 
         animationTask?.cancel()
+        HapticService.shared.startContinuousTexture(
+            key: movementHapticKey,
+            duration: duration,
+            intensity: 0.10,
+            sharpness: 0.25
+        )
         animationTask = Task { [weak self, weak glass] in
             let startTime = ProcessInfo.processInfo.systemUptime
             while !Task.isCancelled {
@@ -90,6 +98,7 @@ final class WindowInteractionController {
                 glass.transform = frameTransform
 
                 guard linearProgress < 1 else {
+                    HapticService.shared.stopContinuousTexture(key: self.movementHapticKey)
                     self.isAnimating = false
                     self.animationTask = nil
                     return
@@ -98,9 +107,11 @@ final class WindowInteractionController {
                 do {
                     try await Task.sleep(for: .milliseconds(16))
                 } catch {
+                    HapticService.shared.stopContinuousTexture(key: self.movementHapticKey)
                     return
                 }
             }
         }
     }
+
 }
