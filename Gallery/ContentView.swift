@@ -55,8 +55,6 @@ struct ContentView: View {
             photoInteractionController.attach(camera: camera, viewportSize: viewportSize)
 
             let room = await loader.load(.room)
-            // Use the authored image-based light as the room's main light.
-            sceneLightingController.setAmbientLight(scene: room, intensity: -5)
             
             albumController.clearAlbums()
             
@@ -163,6 +161,10 @@ struct ContentView: View {
             .overlay(alignment: .bottom) { AnyView(sceneStatusOverlay) }
             .overlay(alignment: .bottom) { AnyView(photoMarkupToolbar) }
             .task { await libraryModel.load() }
+            .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
+                guard scenePhase == .active else { return }
+                sceneLightingController.refreshForCurrentTime()
+            }
         .onChange(of: boxInteractionController.phase) { _, _ in refreshAlbums() }
         .onChange(of: boxInteractionController.canAccessAlbums) { _, _ in refreshAlbums() }
         .onChange(of: albumController.isPrepared) { _, _ in refreshAlbums() }
@@ -399,6 +401,7 @@ struct ContentView: View {
             AudioService.shared.pauseAmbientLoop()
             if photoInteractionController.isOpen { closePhotoCard() }
         } else {
+            sceneLightingController.refreshForCurrentTime()
             AudioService.shared.resumeAmbientLoop()
         }
     }

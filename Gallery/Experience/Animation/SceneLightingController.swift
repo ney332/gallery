@@ -4,6 +4,11 @@ import RealityKit
 /// Controls the PointLights authored in Reality Composer.
 @MainActor
 final class SceneLightingController {
+    private enum TimeOfDay { case day, night }
+
+    private weak var sceneRoot: Entity?
+    private weak var sunLight: Entity?
+    private var appliedTimeOfDay: TimeOfDay?
     private var composerLampLights: [Entity] = []
     private weak var lampPull: Entity?
     private var lampPullHome: Transform?
@@ -39,17 +44,15 @@ final class SceneLightingController {
         lampPullTask = nil
         lampPull = nil
         lampPullHome = nil
+        sceneRoot = root
+        appliedTimeOfDay = nil
         composerLampLights = installComposerLampLights(in: root)
         print("Lamp tap controls \(composerLampLights.count) Composer PointLight(s)")
         let disabledLights = removeRoomLights(in: root)
-        print("Disabled \(disabledLights) room light(s) so the scene starts dark")
-        if let sun = root.findEntity(named: "sol"),
-           sun.components[SpotLightComponent.self] != nil {
-            sun.isEnabled = true
-            print("Enabled Composer spotlight: sol")
-        } else {
-            print("Composer spotlight 'sol' was not found")
-        }
+        print("Disabled \(disabledLights) unused room light(s)")
+        let sun = root.findEntity(named: "sol")
+        sunLight = sun?.components[SpotLightComponent.self] != nil ? sun : nil
+        if sunLight == nil { print("Composer spotlight 'sol' was not found") }
         lampPull = findEntity(named: "PuxadorBolinhas", in: root)
         if lampPull == nil, let shade = findEntity(named: "Topo_do_Abajur", in: root) {
             lampPull = findLampPull(in: shade)
@@ -58,7 +61,21 @@ final class SceneLightingController {
             lampPull = findLampPull(in: lampBase)
         }
         print("Lamp pull target: " + (lampPull?.name ?? "not found"))
+        refreshForCurrentTime()
+    }
 
+    func refreshForCurrentTime(date: Date = Date(), calendar: Calendar = .current) {
+        guard let root = sceneRoot else { return }
+        let hour = calendar.component(.hour, from: date)
+        let timeOfDay: TimeOfDay = (6..<18).contains(hour) ? .day : .night
+        guard timeOfDay != appliedTimeOfDay else { return }
+        appliedTimeOfDay = timeOfDay
+
+        let isDay = timeOfDay == .day
+        sunLight?.isEnabled = isDay
+        setAmbientLight(scene: root, intensity: isDay ? -3 : -7)
+        setLampEnabled(!isDay)
+        print("Room lighting: \(isDay ? "day" : "night"), sun \(isDay ? "on" : "off"), lamp \(isDay ? "off" : "on")")
     }
 
     func setLampEnabled(_ enabled: Bool) {
