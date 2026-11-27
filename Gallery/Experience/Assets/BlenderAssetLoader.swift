@@ -126,7 +126,8 @@ struct BlenderAssetLoader {
         // assigns that root the logical name `BaseScenario` before this runs.
         let world = findEntity(named: "world", in: root) ?? root
 
-        let targetNames: Set<String> = ["manha", "manha_001", "tarde", "noite"]
+        // Keep the morning and afternoon planes for the blue daytime backdrop.
+        let targetNames: Set<String> = ["manha", "noite"]
         var objectsToRemove: [Entity] = []
         func collect(from parent: Entity) {
             for child in parent.children {

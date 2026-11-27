@@ -1,13 +1,16 @@
 import Foundation
 import RealityKit
+import UIKit
 
 /// Controls the PointLights authored in Reality Composer.
 @MainActor
 final class SceneLightingController {
-    private enum TimeOfDay { case day, night }
+    private enum TimeOfDay { case morning, afternoon, night }
 
     private weak var sceneRoot: Entity?
     private weak var sunLight: Entity?
+    private weak var morningBackdrop: Entity?
+    private weak var afternoonBackdrop: Entity?
     private var appliedTimeOfDay: TimeOfDay?
     private var composerLampLights: [Entity] = []
     private weak var lampPull: Entity?
@@ -53,6 +56,10 @@ final class SceneLightingController {
         let sun = root.findEntity(named: "sol")
         sunLight = sun?.components[SpotLightComponent.self] != nil ? sun : nil
         if sunLight == nil { print("Composer spotlight 'sol' was not found") }
+        morningBackdrop = root.findEntity(named: "Manha_001")
+        afternoonBackdrop = root.findEntity(named: "Tarde")
+        colorBackdrop(in: morningBackdrop)
+        colorBackdrop(in: afternoonBackdrop)
         lampPull = findEntity(named: "PuxadorBolinhas", in: root)
         if lampPull == nil, let shade = findEntity(named: "Topo_do_Abajur", in: root) {
             lampPull = findLampPull(in: shade)
@@ -67,15 +74,35 @@ final class SceneLightingController {
     func refreshForCurrentTime(date: Date = Date(), calendar: Calendar = .current) {
         guard let root = sceneRoot else { return }
         let hour = calendar.component(.hour, from: date)
-        let timeOfDay: TimeOfDay = (6..<18).contains(hour) ? .day : .night
+        let timeOfDay: TimeOfDay
+        switch hour {
+        case 6..<12: timeOfDay = .morning
+        case 12..<18: timeOfDay = .afternoon
+        default: timeOfDay = .night
+        }
         guard timeOfDay != appliedTimeOfDay else { return }
         appliedTimeOfDay = timeOfDay
 
-        let isDay = timeOfDay == .day
+        let isDay = timeOfDay != .night
+        morningBackdrop?.isEnabled = timeOfDay == .morning
+        afternoonBackdrop?.isEnabled = timeOfDay == .afternoon
         sunLight?.isEnabled = isDay
-        setAmbientLight(scene: root, intensity: isDay ? -3 : -7)
+        setAmbientLight(scene: root, intensity: isDay ? -2 : -7)
         setLampEnabled(!isDay)
         print("Room lighting: \(isDay ? "day" : "night"), sun \(isDay ? "on" : "off"), lamp \(isDay ? "off" : "on")")
+    }
+
+    private func colorBackdrop(in group: Entity?) {
+        guard let group else { return }
+        let blue = UIColor(red: 0.42, green: 0.66, blue: 0.78, alpha: 1)
+        func recolor(_ entity: Entity) {
+            if var model = entity.components[ModelComponent.self] {
+                model.materials = [UnlitMaterial(color: blue)]
+                entity.components.set(model)
+            }
+            for child in entity.children { recolor(child) }
+        }
+        recolor(group)
     }
 
     func setLampEnabled(_ enabled: Bool) {
