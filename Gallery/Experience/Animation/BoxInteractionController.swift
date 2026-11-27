@@ -50,6 +50,7 @@ final class BoxInteractionController {
     @ObservationIgnored private var sequence: Task<Void, Never>?
     private var dragSide: Side?
     @ObservationIgnored private var dragStartProgress: Float = 0
+    @ObservationIgnored private var flapGestureSoundPlayed = false
     private var progress: [Side: Float] = [:]
     @ObservationIgnored private var cameraHome: Transform?
     @ObservationIgnored private var isDraggingTape = false
@@ -257,13 +258,24 @@ final class BoxInteractionController {
         if dragSide == nil {
             dragSide = side
             dragStartProgress = progress[side, default: 0]
+            flapGestureSoundPlayed = false
             flap(side, rig: rig).stopAllAnimations(recursive: false)
-            AudioService.shared.playOneShot(named: "Abrindocaixa", volume: 0.9)
             HapticService.shared.resetGestureTexture(key: side.hapticKey)
         }
         guard dragSide == side else { return }
         let travel = max(Float(viewportWidth) * 0.20, 100)
+        let previousAmount = progress[side, default: 0]
         let amount = min(max(dragStartProgress + Float(translation.width) * side.sign / travel, 0), 1)
+        let delta = amount - previousAmount
+        if !flapGestureSoundPlayed, abs(delta) > 0.001 {
+            if delta > 0 {
+                AudioService.shared.playOneShot(
+                    named: side == .left ? "Abrindocaixa" : "Abrindocaixa2",
+                    volume: 0.9
+                )
+                flapGestureSoundPlayed = true
+            }
+        }
         progress[side] = amount
         saveFlapProgress(side, amount: amount, rig: rig)
         flap(side, rig: rig).transform = flapTransform(side, amount: amount, rig: rig)
@@ -295,6 +307,7 @@ final class BoxInteractionController {
             relativeTo: rig.box, duration: 0.22, timingFunction: .easeInOut
         )
         dragSide = nil
+        flapGestureSoundPlayed = false
     }
 
     func returnToShelf() {
@@ -304,6 +317,11 @@ final class BoxInteractionController {
         isDraggingTape = false
         phase = .returning
         rig.box.stopAllAnimations(recursive: true)
+        let closingBothFlaps = progress[.left, default: 0] > 0.01
+            || progress[.right, default: 0] > 0.01
+        if closingBothFlaps {
+            AudioService.shared.playOneShot(named: "FechandoCaixa", volume: 0.9)
+        }
         markFlapsClosed(in: rig)
         rig.tape.transform = rig.tapeHome
         rig.tape.isEnabled = rig.tapeWasEnabled && !session[rig.box.name].isTapeRemoved
