@@ -144,6 +144,13 @@ struct BlenderAssetLoader {
         collect(from: world)
 
         for object in objectsToRemove {
+            // The Composer spotlight is nested under "Manha". Keep it when
+            // removing the time-of-day geometry, without changing its pose.
+            if let sun = object.findEntity(named: "sol"),
+               sun.components[SpotLightComponent.self] != nil {
+                sun.setParent(world, preservingWorldTransform: true)
+                print("Preserved Composer spotlight 'sol' from \(object.name)")
+            }
             object.removeFromParent()
         }
         print("Removed \(objectsToRemove.count) time-of-day objects from world: \(objectsToRemove.map(\.name).joined(separator: ", "))")

@@ -43,6 +43,13 @@ final class SceneLightingController {
         print("Lamp tap controls \(composerLampLights.count) Composer PointLight(s)")
         let disabledLights = removeRoomLights(in: root)
         print("Disabled \(disabledLights) room light(s) so the scene starts dark")
+        if let sun = root.findEntity(named: "sol"),
+           sun.components[SpotLightComponent.self] != nil {
+            sun.isEnabled = true
+            print("Enabled Composer spotlight: sol")
+        } else {
+            print("Composer spotlight 'sol' was not found")
+        }
         lampPull = findEntity(named: "PuxadorBolinhas", in: root)
         if lampPull == nil, let shade = findEntity(named: "Topo_do_Abajur", in: root) {
             lampPull = findLampPull(in: shade)
@@ -123,7 +130,8 @@ final class SceneLightingController {
                 entity.components.remove(DirectionalLightComponent.self)
                 count += 1
             }
-            if entity.components[SpotLightComponent.self] != nil {
+            if entity.components[SpotLightComponent.self] != nil,
+               entity.name.compare("sol", options: [.caseInsensitive, .diacriticInsensitive]) != .orderedSame {
                 entity.components.remove(SpotLightComponent.self)
                 count += 1
             }
