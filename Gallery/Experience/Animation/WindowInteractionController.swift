@@ -67,7 +67,7 @@ final class WindowInteractionController {
         let opening = progress < 0.5
         let destinationProgress: Float = opening ? 1 : 0
         let soundName = opening ? "AbrirJanela" : "FecharJanela"
-        let audioDuration = AudioService.shared.playOneShot(named: soundName, volume: 0.85)
+        let audioDuration = AudioService.shared.playOneShot(named: soundName, volume: 0.5)
         let duration = audioDuration.isFinite && audioDuration > 0 ? audioDuration : 0.9
 
         progress = destinationProgress

@@ -329,9 +329,9 @@ struct ContentView: View {
             return
         }
         if let drawer = drawerAncestor(from: entity) {
-            // Tapping an already focused drawer must not leave the focused view.
-            // The explicit Back button is the only way to return from focus.
-            if !orbitController.isFocused {
+            // A different drawer can take focus directly; tapping the current one
+            // leaves it focused. The Back button returns to the overview.
+            if !orbitController.isFocused(on: drawer) {
                 orbitController.toggleFocus(on: drawer, lookingFromFront: true, pitchDegrees: 45, minimumRadius: 2.1)
             }
             return
